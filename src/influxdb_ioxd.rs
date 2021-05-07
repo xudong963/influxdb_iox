@@ -155,6 +155,50 @@ pub async fn main(config: Config) -> Result<()> {
     // Construct a token to trigger shutdown of API services
     let frontend_shutdown = internal_shutdown.child_token();
 
+    tokio::spawn(async {
+        let listen = "0.0.0.0:9999";
+        info!("Listening on TCP: {}", listen);
+        let l = tokio::net::TcpListener::bind(listen).await.unwrap();
+
+        let mut profiler: Option<pprof::ProfilerGuard<'static>> = None;
+
+        loop {
+            info!("Waiting...");
+            l.accept().await.unwrap();
+            info!("Going...");
+
+            match profiler.take() {
+                None => {
+                    info!("Starting CPU performance report");
+                    let frequency = 100;
+                    profiler = Some(pprof::ProfilerGuard::new(frequency).unwrap());
+                }
+
+                Some(profiler) => {
+                    tokio::task::spawn_blocking(move || {
+                        use std::{io::Write, fs::File};
+                        use prost::Message;
+
+                        let fname = "/tmp/profile.pb";
+
+                        info!("Stopping CPU performance report; writing to {}", fname);
+
+                        let report = profiler.report().build().unwrap();
+
+                        println!("report: {:?}", &report);
+
+                        let mut file = File::create(fname).unwrap();
+                        let profile = report.pprof().unwrap();
+
+                        let mut content = Vec::new();
+                        profile.encode(&mut content).unwrap();
+                        file.write_all(&content).unwrap();
+                    }).await.unwrap();
+                }
+            }
+        }
+    });
+
     // Construct and start up gRPC server
     let grpc_bind_addr = config.grpc_bind_address;
     let socket = tokio::net::TcpListener::bind(grpc_bind_addr)
