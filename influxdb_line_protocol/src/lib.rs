@@ -541,7 +541,7 @@ fn split_lines(input: &str) -> impl Iterator<Item = &str> {
 }
 
 fn split_trim_lines_idx(input: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
-    split_lines_idx(input).filter_map(move |(start, end)| trim_line(input, start, end))
+    split_lines_idx(input).filter_map(move |(start, end)| trim_leading(input, start, end))
 }
 
 /// Split `input` into individual lines to be parsed, based on the
@@ -816,28 +816,17 @@ fn field_bool_value(i: &str) -> IResult<&str, bool> {
     ))(i)
 }
 
-// Trims a single line slice returning None if this is a comment
-// or has no non-whitespace characters
-fn trim_line(i: &str, start: usize, end: usize) -> Option<(usize, usize)> {
+// Trims a single line slice removing leading whitespace
+// Returns None if this is a comment or has no non-whitespace characters
+fn trim_leading(i: &str, start: usize, end: usize) -> Option<(usize, usize)> {
     let str = &i[start..end];
-    let i = str.find(|c: char| !c.is_whitespace())?;
-
-    // Unfortunately rfind only returns the start byte index
-    // if/when the matcher API is stablised it may provide a
-    // better way to do this
-    let mut j = end - start;
-    for (idx, char) in str.char_indices().rev() {
-        if !char.is_whitespace() {
-            break;
-        }
-        j = idx
-    }
+    let i = str.find(|c: char| !is_whitespace_boundary_char(c))?;
 
     if str.as_bytes()[i] as char == '#' {
         return None;
     }
 
-    Some((start + i, j + start))
+    Some((start + i, end))
 }
 
 fn whitespace(i: &str) -> IResult<&str, &str> {
@@ -1201,12 +1190,12 @@ mod test {
 
     #[test]
     fn test_trim() {
-        assert_eq!(trim_line("  foo  boo", 0, 7).unwrap(), (2, 5));
-        assert_eq!(trim_line("  foo  boo", 0, 8).unwrap(), (2, 8));
-        assert_eq!(trim_line("  foo  boo", 1, 8).unwrap(), (2, 8));
-        assert_eq!(trim_line("  foo  boo", 3, 8).unwrap(), (3, 8));
-        assert!(trim_line("  foo  boo", 0, 2).is_none());
-        assert!(trim_line("  foo  boo", 5, 7).is_none());
+        assert_eq!(trim_leading("  foo  boo", 0, 7).unwrap(), (2, 7));
+        assert_eq!(trim_leading("  foo  boo", 0, 8).unwrap(), (2, 8));
+        assert_eq!(trim_leading("  foo  boo", 1, 8).unwrap(), (2, 8));
+        assert_eq!(trim_leading("  foo  boo", 3, 8).unwrap(), (3, 8));
+        assert!(trim_leading("  foo  boo", 0, 2).is_none());
+        assert!(trim_leading("  foo  boo", 5, 7).is_none());
     }
 
     #[test]
@@ -1250,25 +1239,25 @@ mod test {
         assert_eq!(
             split_lines("   meas tag=val field=1,field=\\\"   \n   val\"\n  next  ")
                 .collect::<Vec<_>>(),
-            vec!["meas tag=val field=1,field=\\\"", "val\"", "next"]
+            vec!["meas tag=val field=1,field=\\\"   ", "val\"", "next  "]
         );
 
         assert_eq!(
             split_lines("   meas tag=val field=1,field=\\\"   \n  \n  val\"\n  next  ")
                 .collect::<Vec<_>>(),
-            vec!["meas tag=val field=1,field=\\\"", "val\"", "next"]
+            vec!["meas tag=val field=1,field=\\\"   ", "val\"", "next  "]
         );
 
         assert_eq!(
             split_lines("   meas tag=val field=1,field=\\\"   \n  \n  val\"\n  next  \n ")
                 .collect::<Vec<_>>(),
-            vec!["meas tag=val field=1,field=\\\"", "val\"", "next"]
+            vec!["meas tag=val field=1,field=\\\"   ", "val\"", "next  "]
         );
 
         assert_eq!(
             split_lines("   meas tag=val field=1,field=\\\" \n  # I'm a comment  \n  \n  val\"\n  next # \n ")
                 .collect::<Vec<_>>(),
-            vec!["meas tag=val field=1,field=\\\"", "val\"", "next #"]
+            vec!["meas tag=val field=1,field=\\\" ", "val\"", "next # "]
         );
 
         assert_eq!(
