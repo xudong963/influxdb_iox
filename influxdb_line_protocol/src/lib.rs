@@ -1197,7 +1197,6 @@ mod test {
         assert!(trim_leading("  foo  boo", 0, 2).is_none());
         assert!(trim_leading("  foo  boo", 5, 7).is_none());
         assert!(trim_leading("  #sdfsdf", 0, 9).is_none())
-
     }
 
     #[test]
