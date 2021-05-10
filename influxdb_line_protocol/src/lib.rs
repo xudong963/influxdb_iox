@@ -37,6 +37,8 @@ use std::{
     ops::Deref,
 };
 
+pub mod record_batch;
+
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display(r#"Must not contain duplicate tags, but "{}" was repeated"#, tag_key))]
