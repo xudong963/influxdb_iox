@@ -1189,13 +1189,15 @@ mod test {
     }
 
     #[test]
-    fn test_trim() {
+    fn test_trim_leading() {
         assert_eq!(trim_leading("  foo  boo", 0, 7).unwrap(), (2, 7));
-        assert_eq!(trim_leading("  foo  boo", 0, 8).unwrap(), (2, 8));
-        assert_eq!(trim_leading("  foo  boo", 1, 8).unwrap(), (2, 8));
+        assert_eq!(trim_leading("  f#o  boo", 0, 8).unwrap(), (2, 8));
+        assert_eq!(trim_leading("  fo#  boo", 1, 8).unwrap(), (2, 8));
         assert_eq!(trim_leading("  foo  boo", 3, 8).unwrap(), (3, 8));
         assert!(trim_leading("  foo  boo", 0, 2).is_none());
         assert!(trim_leading("  foo  boo", 5, 7).is_none());
+        assert!(trim_leading("  #sdfsdf", 0, 9).is_none())
+
     }
 
     #[test]
