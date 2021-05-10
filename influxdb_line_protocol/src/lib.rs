@@ -612,19 +612,20 @@ fn split_lines_idx(input: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
 
     let mut cur_idx = 0;
     std::iter::from_fn(move || {
-        if cur_idx >= input.len() {
+        let input_len = input.len();
+        if cur_idx >= input_len {
             return None;
         }
 
         let end = input[cur_idx..]
             .find(is_delimiter)
             .map(|x| x + cur_idx)
-            .unwrap_or(input.len());
+            .unwrap_or(input_len);
 
         let start = cur_idx;
         cur_idx = end + '\n'.len_utf8();
 
-        return Some((start, end));
+        Some((start, end))
     })
 }
 
@@ -827,7 +828,7 @@ fn trim_line(i: &str, start: usize, end: usize) -> Option<(usize, usize)> {
     let mut j = end - start;
     for (idx, char) in str.char_indices().rev() {
         if !char.is_whitespace() {
-            break
+            break;
         }
         j = idx
     }
