@@ -2273,4 +2273,12 @@ her"#,
 
         assert_eq!(vals[0].tag_value("asdf"), None);
     }
+
+    #[test]
+    fn split_lines_supports_utf8() {
+        assert_eq!(
+            split_lines("föo\nb💩r\nba👩‍👩‍👦‍👦").collect::<Vec<_>>(),
+            vec!["föo", "b💩r", "ba👩‍👩‍👦‍👦"]
+        );
+    }
 }
