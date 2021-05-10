@@ -565,62 +565,66 @@ fn split_lines_idx(input: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
     let mut commas = 0;
 
     let mut in_escape = false;
+    let is_delimiter = move |c| {
+        // skip past escaped characters
+        if in_escape {
+            in_escape = false;
+            return false;
+        }
 
-    let mut last_idx = 0;
-    let mut chars = input.chars().enumerate();
+        if c == '\\' {
+            in_escape = true;
+            return false;
+        }
 
+        if c == ' ' {
+            fields = true;
+            return false;
+        }
+
+        // If we see a double quote, makes sure it is not escaped
+        if fields {
+            if !quoted && c == '=' {
+                equals += 1;
+                return false;
+            } else if !quoted && c == ',' {
+                commas += 1;
+                return false;
+            } else if c == '"' && equals > commas {
+                quoted = !quoted;
+                return false;
+            }
+        }
+
+        if c == '\n' && !quoted {
+            // reset all the state -- we found a line
+            quoted = false;
+            fields = false;
+            equals = 0;
+            commas = 0;
+            assert!(!in_escape);
+            in_escape = false;
+            return true;
+        }
+
+        false
+    };
+
+    let mut cur_idx = 0;
     std::iter::from_fn(move || {
-        for (idx, c) in &mut chars {
-            // skip past escaped characters
-            if in_escape {
-                in_escape = false;
-                continue;
-            }
-
-            if c == '\\' {
-                in_escape = true;
-                continue;
-            }
-
-            if c == ' ' {
-                fields = true;
-                continue;
-            }
-
-            // If we see a double quote, makes sure it is not escaped
-            if fields {
-                if !quoted && c == '=' {
-                    equals += 1;
-                    continue;
-                } else if !quoted && c == ',' {
-                    commas += 1;
-                    continue;
-                } else if c == '"' && equals > commas {
-                    quoted = !quoted;
-                    continue;
-                }
-            }
-
-            if c == '\n' && !quoted {
-                // reset all the state -- we found a line
-                quoted = false;
-                fields = false;
-                equals = 0;
-                commas = 0;
-                assert!(!in_escape);
-                in_escape = false;
-                let t = last_idx;
-                last_idx = idx + 1;
-                return Some((t, idx));
-            }
+        if cur_idx >= input.len() {
+            return None;
         }
 
-        if last_idx < input.len() {
-            let t = last_idx;
-            last_idx = input.len();
-            return Some((t, input.len()));
-        }
-        None
+        let end = input[cur_idx..]
+            .find(is_delimiter)
+            .map(|x| x + cur_idx)
+            .unwrap_or(input.len());
+
+        let start = cur_idx;
+        cur_idx = end + '\n'.len_utf8();
+
+        return Some((start, end));
     })
 }
 
@@ -816,13 +820,23 @@ fn field_bool_value(i: &str) -> IResult<&str, bool> {
 fn trim_line(i: &str, start: usize, end: usize) -> Option<(usize, usize)> {
     let str = &i[start..end];
     let i = str.find(|c: char| !c.is_whitespace())?;
-    let j = str.rfind(|c: char| !c.is_whitespace())?;
+
+    // Unfortunately rfind only returns the start byte index
+    // if/when the matcher API is stablised it may provide a
+    // better way to do this
+    let mut j = end - start;
+    for (idx, char) in str.char_indices().rev() {
+        if !char.is_whitespace() {
+            break
+        }
+        j = idx
+    }
 
     if str.as_bytes()[i] as char == '#' {
         return None;
     }
 
-    Some((start + i, j + 1 + start))
+    Some((start + i, j + start))
 }
 
 fn whitespace(i: &str) -> IResult<&str, &str> {
