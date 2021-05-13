@@ -233,17 +233,18 @@ impl<'a> Display for ParsedLine<'a> {
 
 /// A `ParsedLine` that owns its data
 #[self_referencing]
-pub struct StaticParsedLine {
+pub struct OwnedParsedLine {
     data: Arc<str>,
 
     #[borrows(data)]
     #[covariant]
+    /// `ParsedLine` backed by a structure that points to some part of `data`
     line: ParsedLine<'this>,
 }
 
-impl StaticParsedLine {
+impl OwnedParsedLine {
     pub fn from_str(data: Arc<str>, start: usize, end: usize) -> Result<Self, Error> {
-        StaticParsedLineTryBuilder {
+        OwnedParsedLineTryBuilder {
             data,
             line_builder: |line| parse_full_line(&line[start..end]),
         }
@@ -501,6 +502,7 @@ impl PartialEq<String> for EscapedStr<'_> {
     }
 }
 
+/// Parse input string into an iterator of `ParsedLine`
 pub fn parse_lines(input: &str) -> impl Iterator<Item = Result<ParsedLine<'_>>> {
     split_lines(input).map(parse_full_line)
 }
@@ -531,9 +533,10 @@ fn parse_full_line(input: &str) -> Result<ParsedLine<'_>> {
     res
 }
 
-pub fn parse_lines_static(input: &Arc<str>) -> impl Iterator<Item = Result<StaticParsedLine>> + '_ {
+/// Parse input string into an iterator of `OwnedParsedLine`
+pub fn parse_lines_owned(input: &Arc<str>) -> impl Iterator<Item = Result<OwnedParsedLine>> + '_ {
     split_trim_lines_idx(input)
-        .map(move |(start, end)| StaticParsedLine::from_str(Arc::clone(input), start, end))
+        .map(move |(start, end)| OwnedParsedLine::from_str(Arc::clone(input), start, end))
 }
 
 fn split_lines(input: &str) -> impl Iterator<Item = &str> {
