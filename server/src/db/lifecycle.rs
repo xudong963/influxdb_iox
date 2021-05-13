@@ -740,9 +740,11 @@ mod tests {
             ..Default::default()
         };
 
-        let rb = Arc::new(read_buffer::Chunk::new_with_memory_tracker(
+        let reg = metrics::MetricRegistry::new();
+        let rb = Arc::new(read_buffer::Chunk::new_with_registries(
             22,
             &tracker::MemRegistry::new(),
+            Arc::new(read_buffer::ChunkMetrics::new(&reg)),
         ));
 
         let chunks = vec![new_chunk(0, Some(0), Some(0))];
@@ -784,9 +786,11 @@ mod tests {
             ..Default::default()
         };
 
-        let rb = Arc::new(read_buffer::Chunk::new_with_memory_tracker(
+        let reg = metrics::MetricRegistry::new();
+        let rb = Arc::new(read_buffer::Chunk::new_with_registries(
             22,
             &tracker::MemRegistry::new(),
+            Arc::new(read_buffer::ChunkMetrics::new(&reg)),
         ));
 
         let chunks = vec![new_chunk(0, Some(0), Some(0))];
@@ -838,9 +842,11 @@ mod tests {
             ..Default::default()
         };
 
-        let rb = Arc::new(read_buffer::Chunk::new_with_memory_tracker(
+        let reg = metrics::MetricRegistry::new();
+        let rb = Arc::new(read_buffer::Chunk::new_with_registries(
             22,
             &tracker::MemRegistry::new(),
+            Arc::new(read_buffer::ChunkMetrics::new(&reg)),
         ));
 
         let chunks = vec![
