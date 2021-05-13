@@ -40,6 +40,9 @@ use snafu::{ResultExt, Snafu};
 
 use observability_deps::tracing::debug;
 
+mod vec;
+pub use vec::*;
+
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display(r#"Must not contain duplicate tags, but "{}" was repeated"#, tag_key))]
@@ -359,8 +362,8 @@ impl<'a> Series<'a> {
 // Previously used SmallVec but it has covariance issues
 // that prevent usage with ouroboros
 // - https://github.com/servo/rust-smallvec/issues/217
-pub type FieldSet<'a> = Vec<(EscapedStr<'a>, FieldValue<'a>)>;
-pub type TagSet<'a> = Vec<(EscapedStr<'a>, EscapedStr<'a>)>;
+pub type FieldSet<'a> = NanoVec<(EscapedStr<'a>, FieldValue<'a>), 4>;
+pub type TagSet<'a> = NanoVec<(EscapedStr<'a>, EscapedStr<'a>), 8>;
 
 /// Allowed types of Fields in a `ParsedLine`. One of the types described in
 /// https://docs.influxdata.com/influxdb/v2.0/reference/syntax/line-protocol/#data-types-and-format
@@ -504,9 +507,10 @@ impl PartialEq<String> for EscapedStr<'_> {
 
 /// Parse input string into an iterator of `ParsedLine`
 pub fn parse_lines(input: &str) -> impl Iterator<Item = Result<ParsedLine<'_>>> {
-    split_lines(input).map(parse_full_line)
+    split_lines(input).map(|(_, str)| parse_full_line(str))
 }
 
+#[inline]
 fn parse_full_line(input: &str) -> Result<ParsedLine<'_>> {
     let res = match parse_line(input) {
         Ok((remaining, line)) => {
@@ -535,16 +539,9 @@ fn parse_full_line(input: &str) -> Result<ParsedLine<'_>> {
 
 /// Parse input string into an iterator of `OwnedParsedLine`
 pub fn parse_lines_owned(input: &Arc<str>) -> impl Iterator<Item = Result<OwnedParsedLine>> + '_ {
-    split_trim_lines_idx(input)
-        .map(move |(start, end)| OwnedParsedLine::from_str(Arc::clone(input), start, end))
-}
-
-fn split_lines(input: &str) -> impl Iterator<Item = &str> {
-    split_trim_lines_idx(input).map(move |(start, end)| &input[start..end])
-}
-
-fn split_trim_lines_idx(input: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
-    split_lines_idx(input).filter_map(move |(start, end)| trim_leading(input, start, end))
+    split_lines(input).map(move |(start, str)| {
+        OwnedParsedLine::from_str(Arc::clone(input), start, start + str.len())
+    })
 }
 
 /// Split `input` into individual lines to be parsed, based on the
@@ -557,7 +554,7 @@ fn split_trim_lines_idx(input: &str) -> impl Iterator<Item = (usize, usize)> + '
 /// logic duplication for scanning fields, duplicating it also means
 /// we can be more sure of the compatibility of the rust parser and
 /// the canonical Go parser.
-fn split_lines_idx(input: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
+fn split_lines(input: &str) -> impl Iterator<Item = (usize, &str)> + '_ {
     // NB: This is ported as closely as possibly from the original Go code:
     let mut quoted = false;
     let mut fields = false;
@@ -614,12 +611,13 @@ fn split_lines_idx(input: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
     };
 
     let mut cur_idx = 0;
-    std::iter::from_fn(move || {
+    std::iter::from_fn(move || loop {
         let input_len = input.len();
         if cur_idx >= input_len {
             return None;
         }
 
+        // SAFETY str::find returns valid byte indexes and cur_idx < input.len()
         let end = input[cur_idx..]
             .find(is_delimiter)
             .map(|x| x + cur_idx)
@@ -628,7 +626,10 @@ fn split_lines_idx(input: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
         let start = cur_idx;
         cur_idx = end + '\n'.len_utf8();
 
-        Some((start, end))
+        // SAFETY str::find returns valid byte indexes
+        if let Some((offset, end)) = trim_leading(&input[start..end]) {
+            return Some((start + offset, end));
+        }
     })
 }
 
@@ -675,7 +676,7 @@ fn measurement(i: &str) -> IResult<&str, EscapedStr<'_>> {
 
 fn tag_set(i: &str) -> IResult<&str, TagSet<'_>> {
     let one_tag = separated_pair(tag_key, tag("="), tag_value);
-    parameterized_separated_list(tag(","), one_tag, Vec::new, |v, i| v.push(i))(i)
+    parameterized_separated_list(tag(","), one_tag, NanoVec::new, |v, i| v.push(i))(i)
 }
 
 fn tag_key(i: &str) -> IResult<&str, EscapedStr<'_>> {
@@ -693,7 +694,7 @@ fn field_set(i: &str) -> IResult<&str, FieldSet<'_>> {
     let one_field = separated_pair(field_key, tag("="), field_value);
     let sep = tag(",");
 
-    match parameterized_separated_list1(sep, one_field, Vec::new, |v, i| v.push(i))(i) {
+    match parameterized_separated_list1(sep, one_field, NanoVec::new, |v, i| v.push(i))(i) {
         Err(nom::Err::Error(_)) => FieldSetMissing.fail().map_err(nom::Err::Error),
         other => other,
     }
@@ -821,21 +822,23 @@ fn field_bool_value(i: &str) -> IResult<&str, bool> {
 
 // Trims a single line slice removing leading whitespace
 // Returns None if this is a comment or has no non-whitespace characters
-fn trim_leading(i: &str, start: usize, end: usize) -> Option<(usize, usize)> {
-    let str = &i[start..end];
-    let i = str.find(|c: char| !is_whitespace_boundary_char(c))?;
-
-    if str.as_bytes()[i] as char == '#' {
+#[inline]
+fn trim_leading(input: &str) -> Option<(usize, &str)> {
+    let offset = input.find(|c: char| !is_whitespace_boundary_char(c))?;
+    if input.as_bytes()[offset] as char == '#' {
         return None;
     }
 
-    Some((start + i, end))
+    // SAFETY str::find returns valid byte indexes
+    Some((offset, &input[offset..]))
 }
 
+#[inline]
 fn whitespace(i: &str) -> IResult<&str, &str> {
     take_while1(|c| c == ' ')(i)
 }
 
+#[inline]
 fn is_whitespace_boundary_char(c: char) -> bool {
     c == ' ' || c == '\t' || c == '\n'
 }
@@ -886,7 +889,7 @@ where
     Error: nom::error::ParseError<&'a str>,
 {
     move |i| {
-        let mut result = Vec::new();
+        let mut result = NanoVec::<_, 4>::new();
         let mut head = i;
 
         loop {
@@ -1112,9 +1115,8 @@ fn escape_and_write_value(
 
 #[cfg(test)]
 mod test {
-    use test_helpers::approximately_equal;
-
     use super::*;
+    use test_helpers::approximately_equal;
 
     impl FieldValue<'_> {
         fn unwrap_i64(&self) -> i64 {
@@ -1193,84 +1195,99 @@ mod test {
 
     #[test]
     fn test_trim_leading() {
-        assert_eq!(trim_leading("  foo  boo", 0, 7).unwrap(), (2, 7));
-        assert_eq!(trim_leading("  f#o  boo", 0, 8).unwrap(), (2, 8));
-        assert_eq!(trim_leading("  fo#  boo", 1, 8).unwrap(), (2, 8));
-        assert_eq!(trim_leading("  foo  boo", 3, 8).unwrap(), (3, 8));
-        assert!(trim_leading("  foo  boo", 0, 2).is_none());
-        assert!(trim_leading("  foo  boo", 5, 7).is_none());
-        assert!(trim_leading("  #sdfsdf", 0, 9).is_none())
+        assert_eq!(trim_leading("  foo  boo").unwrap(), (2, "foo  boo"));
+        assert_eq!(trim_leading("  f#o  boo").unwrap(), (2, "f#o  boo"));
+        assert_eq!(trim_leading(" fo#  boo").unwrap(), (1, "fo#  boo"));
+        assert_eq!(trim_leading("oo  boo").unwrap(), (0, "oo  boo"));
+        assert!(trim_leading("  ").is_none());
+        assert!(trim_leading("  #sdfsdf").is_none())
     }
 
     #[test]
     fn test_split_lines() {
         assert_eq!(split_lines("").count(), 0);
-        assert_eq!(split_lines("foo").collect::<Vec<_>>(), vec!["foo"]);
+        assert_eq!(split_lines("foo").collect::<Vec<_>>(), vec![(0, "foo")]);
         assert_eq!(
             split_lines("foo\nbar").collect::<Vec<_>>(),
-            vec!["foo", "bar"]
+            vec![(0, "foo"), (4, "bar")]
         );
         assert_eq!(
             split_lines("foo\nbar\nbaz").collect::<Vec<_>>(),
-            vec!["foo", "bar", "baz"]
+            vec![(0, "foo"), (4, "bar"), (8, "baz")]
         );
 
         assert_eq!(
             split_lines("foo\\nbar\nbaz").collect::<Vec<_>>(),
-            vec!["foo\\nbar", "baz"]
+            vec![(0, "foo\\nbar"), (9, "baz")]
         );
         assert_eq!(
             split_lines("meas tag=val field=1\nnext\n").collect::<Vec<_>>(),
-            vec!["meas tag=val field=1", "next"]
+            vec![(0, "meas tag=val field=1"), (21, "next")]
         );
         assert_eq!(
             split_lines("meas tag=val field=\"\nval\"\nnext").collect::<Vec<_>>(),
-            vec!["meas tag=val field=\"\nval\"", "next"]
+            vec![(0, "meas tag=val field=\"\nval\""), (26, "next")]
         );
         assert_eq!(
             split_lines("meas tag=val field=\\\"\nval\"\nnext").collect::<Vec<_>>(),
-            vec!["meas tag=val field=\\\"", "val\"", "next"]
+            vec![(0, "meas tag=val field=\\\""), (22, "val\""), (27, "next")]
         );
         assert_eq!(
             split_lines("meas tag=val field=1,field=\"\nval\"\nnext").collect::<Vec<_>>(),
-            vec!["meas tag=val field=1,field=\"\nval\"", "next"]
+            vec![(0, "meas tag=val field=1,field=\"\nval\""), (34, "next")]
         );
         assert_eq!(
             split_lines("meas tag=val field=1,field=\\\"\nval\"\nnext").collect::<Vec<_>>(),
-            vec!["meas tag=val field=1,field=\\\"", "val\"", "next"]
+            vec![
+                (0, "meas tag=val field=1,field=\\\""),
+                (30, "val\""),
+                (35, "next")
+            ]
         );
 
         assert_eq!(
             split_lines("   meas tag=val field=1,field=\\\"   \n   val\"\n  next  ")
                 .collect::<Vec<_>>(),
-            vec!["meas tag=val field=1,field=\\\"   ", "val\"", "next  "]
+            vec![
+                (3, "meas tag=val field=1,field=\\\"   "),
+                (39, "val\""),
+                (46, "next  ")
+            ]
         );
 
         assert_eq!(
             split_lines("   meas tag=val field=1,field=\\\"   \n  \n  val\"\n  next  ")
                 .collect::<Vec<_>>(),
-            vec!["meas tag=val field=1,field=\\\"   ", "val\"", "next  "]
+            vec![
+                (3, "meas tag=val field=1,field=\\\"   "),
+                (41, "val\""),
+                (48, "next  ")
+            ]
         );
 
         assert_eq!(
             split_lines("   meas tag=val field=1,field=\\\"   \n  \n  val\"\n  next  \n ")
                 .collect::<Vec<_>>(),
-            vec!["meas tag=val field=1,field=\\\"   ", "val\"", "next  "]
+            vec![
+                (3, "meas tag=val field=1,field=\\\"   "),
+                (41, "val\""),
+                (48, "next  ")
+            ]
         );
 
         assert_eq!(
             split_lines("   meas tag=val field=1,field=\\\" \n  # I'm a comment  \n  \n  val\"\n  next # \n ")
                 .collect::<Vec<_>>(),
-            vec!["meas tag=val field=1,field=\\\" ", "val\"", "next # "]
+            vec![(3, "meas tag=val field=1,field=\\\" "), (59, "val\""), (66, "next # ")]
         );
 
         assert_eq!(
             split_lines("cpu,host=c val=11 1\nmem sval=\"hi\" 2\ndisk val=true 1")
                 .collect::<Vec<_>>(),
             vec![
-                "cpu,host=c val=11 1",
-                "mem sval=\"hi\" 2",
-                "disk val=true 1"
+                (0, "cpu,host=c val=11 1"),
+                (20, "mem sval=\"hi\" 2"),
+                (36, "disk val=true 1")
             ]
         );
     }
@@ -1395,7 +1412,7 @@ mod test {
 
         for (input, expected_parsed_string_value) in test_data {
             let vals = parse(input).unwrap();
-            assert_eq!(vals[0].series.tag_set, None);
+            assert!(vals[0].series.tag_set.is_none());
             assert_eq!(vals[0].field_set.len(), 1);
             assert_eq!(vals[0].field_set[0].0, "asdf");
             assert_eq!(
@@ -1422,7 +1439,7 @@ mod test {
 
         for (input, expected_parsed_bool_value) in test_data {
             let vals = parse(input).unwrap();
-            assert_eq!(vals[0].series.tag_set, None);
+            assert!(vals[0].series.tag_set.is_none());
             assert_eq!(vals[0].field_set.len(), 1);
             assert_eq!(vals[0].field_set[0].0, "asdf");
             assert_eq!(
@@ -2145,7 +2162,7 @@ her"#,
         let series = Series {
             raw_input: "foo",
             measurement: EscapedStr::from("m"),
-            tag_set: Some(vec![(EscapedStr::from("tag1"), EscapedStr::from("val1"))]),
+            tag_set: Some(vec![(EscapedStr::from("tag1"), EscapedStr::from("val1"))].into()),
         };
         assert_eq!(series.to_string(), "m,tag1=val1");
     }
@@ -2155,10 +2172,13 @@ her"#,
         let series = Series {
             raw_input: "foo",
             measurement: EscapedStr::from("m"),
-            tag_set: Some(vec![
-                (EscapedStr::from("tag1"), EscapedStr::from("val1")),
-                (EscapedStr::from("tag2"), EscapedStr::from("val2")),
-            ]),
+            tag_set: Some(
+                vec![
+                    (EscapedStr::from("tag1"), EscapedStr::from("val1")),
+                    (EscapedStr::from("tag2"), EscapedStr::from("val2")),
+                ]
+                .into(),
+            ),
         };
         assert_eq!(series.to_string(), "m,tag1=val1,tag2=val2");
     }
@@ -2168,9 +2188,9 @@ her"#,
         let series = Series {
             raw_input: "foo",
             measurement: EscapedStr::from("m"),
-            tag_set: Some(vec![(EscapedStr::from("tag1"), EscapedStr::from("val1"))]),
+            tag_set: Some(vec![(EscapedStr::from("tag1"), EscapedStr::from("val1"))].into()),
         };
-        let field_set = vec![(EscapedStr::from("field1"), FieldValue::F64(42.1))];
+        let field_set = vec![(EscapedStr::from("field1"), FieldValue::F64(42.1))].into();
 
         let parsed_line = ParsedLine {
             series,
@@ -2186,9 +2206,9 @@ her"#,
         let series = Series {
             raw_input: "foo",
             measurement: EscapedStr::from("m"),
-            tag_set: Some(vec![(EscapedStr::from("tag1"), EscapedStr::from("val1"))]),
+            tag_set: Some(vec![(EscapedStr::from("tag1"), EscapedStr::from("val1"))].into()),
         };
-        let field_set = vec![(EscapedStr::from("field1"), FieldValue::F64(42.1))];
+        let field_set = vec![(EscapedStr::from("field1"), FieldValue::F64(42.1))].into();
 
         let parsed_line = ParsedLine {
             series,
@@ -2204,12 +2224,13 @@ her"#,
         let series = Series {
             raw_input: "foo",
             measurement: EscapedStr::from("m"),
-            tag_set: Some(vec![(EscapedStr::from("tag1"), EscapedStr::from("val1"))]),
+            tag_set: Some(vec![(EscapedStr::from("tag1"), EscapedStr::from("val1"))].into()),
         };
         let field_set = vec![
             (EscapedStr::from("field1"), FieldValue::F64(42.1)),
             (EscapedStr::from("field2"), FieldValue::Boolean(false)),
-        ];
+        ]
+        .into();
 
         let parsed_line = ParsedLine {
             series,
@@ -2228,15 +2249,13 @@ her"#,
         let series = Series {
             raw_input: "foo",
             measurement: EscapedStr::from("m,and m"),
-            tag_set: Some(vec![(
-                EscapedStr::from("tag ,1"),
-                EscapedStr::from("val ,1"),
-            )]),
+            tag_set: Some(vec![(EscapedStr::from("tag ,1"), EscapedStr::from("val ,1"))].into()),
         };
         let field_set = vec![(
             EscapedStr::from("field ,1"),
             FieldValue::String(EscapedStr::from("Foo\"Bar")),
-        )];
+        )]
+        .into();
 
         let parsed_line = ParsedLine {
             series,
@@ -2286,7 +2305,11 @@ her"#,
     fn split_lines_supports_utf8() {
         assert_eq!(
             split_lines("föo\nb💩r\nba👩‍👩‍👦‍👦").collect::<Vec<_>>(),
-            vec!["föo", "b💩r", "ba👩‍👩‍👦‍👦"]
+            vec![
+                (0, "föo"),
+                ("föo\n".len(), "b💩r"),
+                ("föo\nb💩r\n".len(), "ba👩‍👩‍👦‍👦")
+            ]
         );
     }
 }
