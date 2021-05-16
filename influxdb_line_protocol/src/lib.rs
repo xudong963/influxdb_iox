@@ -239,6 +239,7 @@ impl<'a> Display for ParsedLine<'a> {
 #[derive(Debug, Clone)]
 pub struct OwnedParsedLine {
     data: Arc<str>,
+    bytes: usize,
 
     #[borrows(data)]
     #[covariant]
@@ -250,9 +251,15 @@ impl OwnedParsedLine {
     pub fn from_str(data: Arc<str>, start: usize, end: usize) -> Result<Self, Error> {
         OwnedParsedLineTryBuilder {
             data,
+            bytes: end - start,
             line_builder: |line| parse_full_line(&line[start..end]),
         }
         .try_build()
+    }
+
+    /// Returns the size in bytes of the string slice from which this was parsed
+    pub fn size_bytes(&self) -> usize {
+        *self.borrow_bytes()
     }
 
     pub fn inner(&self) -> &ParsedLine<'_> {

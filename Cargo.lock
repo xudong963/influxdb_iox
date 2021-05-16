@@ -3173,6 +3173,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusoto_kinesis"
+version = "0.46.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15603c1ee187cd789647e2b3ec2e9bec259b247b4ed04f6e6002616b39bc9d51"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "rusoto_core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rusoto_s3"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3713,8 +3727,24 @@ checksum = "213701ba3370744dcd1a12960caa4843b3d68b4d1c0a5d575e0d65b2ee9d16c0"
 name = "stream"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "chrono",
+ "data_types",
+ "entry",
+ "futures",
+ "hashbrown 0.11.2",
  "influxdb_line_protocol",
+ "observability_deps",
+ "parking_lot",
+ "pin-project 1.0.7",
+ "prost",
+ "prost-build",
+ "rusoto_core",
+ "rusoto_kinesis",
  "snafu",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
 ]
 
 [[package]]
@@ -4059,6 +4089,7 @@ dependencies = [
  "futures-sink",
  "log",
  "pin-project-lite",
+ "slab",
  "tokio",
 ]
 

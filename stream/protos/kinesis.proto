@@ -1,0 +1,7 @@
+syntax = "proto3";
+package influxdata.iox.kinesis.v1;
+
+message EntryPayload {
+  string expected_shard = 1;
+  bytes entry = 2;
+}

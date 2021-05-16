@@ -607,6 +607,7 @@ impl<M: ConnectionManager + Send + Sync> Server<M> {
                                     let client = Arc::clone(&self.kinesis_client);
                                     let arn = stream.arn.clone();
                                     async move {
+                                        // TODO: This probably needs to be namespaced by DB
                                         client.handle_write(arn, lines).await.context(KinesisError)
                                     }
                                     .boxed()
