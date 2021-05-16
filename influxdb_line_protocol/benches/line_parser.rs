@@ -5,6 +5,7 @@ static LINES: &str = include_str!("../../tests/fixtures/lineproto/prometheus.lp"
 
 fn line_parser(c: &mut Criterion) {
     let mut group = c.benchmark_group("line_parser");
+    let lines = std::sync::Arc::from(LINES);
 
     // group.throughput(Throughput::Elements(LINES.lines().count() as u64));
     group.throughput(Throughput::Bytes(LINES.len() as u64));
@@ -12,7 +13,7 @@ fn line_parser(c: &mut Criterion) {
 
     group.bench_function("all lines", |b| {
         b.iter(|| {
-            let lines = influxdb_line_protocol::parse_lines(LINES)
+            let lines = influxdb_line_protocol::parse_lines_owned(&lines)
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
 

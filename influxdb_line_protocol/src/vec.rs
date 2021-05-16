@@ -9,7 +9,7 @@ use std::ops::Index;
 /// This is a hopefully temporary workaround until the upstream
 /// bug is fixed -https://github.com/servo/rust-smallvec/issues/217
 ///
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NanoVec<T: Sized, const C: usize> {
     Inline(arrayvec::ArrayVec<T, C>),
     Heap(Vec<T>),

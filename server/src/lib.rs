@@ -83,8 +83,8 @@ use data_types::{
     server_id::ServerId,
     {DatabaseName, DatabaseNameError},
 };
-use entry::{lines_to_sharded_entries, Entry, OwnedSequencedEntry, ShardedEntry};
-use influxdb_line_protocol::ParsedLine;
+use entry::{lines_to_entry, Entry, OwnedSequencedEntry};
+use influxdb_line_protocol::OwnedParsedLine;
 use internal_types::once::OnceNonZeroU32;
 use metrics::{KeyValue, MetricObserverBuilder, MetricRegistry};
 use object_store::{path::ObjectStorePath, ObjectStore, ObjectStoreApi};
@@ -99,11 +99,12 @@ use crate::{
     },
     db::Db,
 };
-use data_types::database_rules::{NodeGroup, Shard, ShardId};
+use chrono::Utc;
+use data_types::database_rules::{NodeGroup, Shard, ShardId, Sharder};
 use generated_types::database_rules::{decode_database_rules, encode_database_rules};
 use influxdb_iox_client::{connection::Builder, write};
 use rand::seq::SliceRandom;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub mod buffer;
 mod config;
@@ -379,7 +380,7 @@ impl<E> From<Error> for UpdateError<E> {
     }
 }
 
-impl<M: ConnectionManager> Server<M> {
+impl<M: ConnectionManager + Send + Sync> Server<M> {
     pub fn new(connection_manager: M, config: ServerConfig) -> Self {
         let jobs = Arc::new(JobRegistry::new());
 
@@ -527,7 +528,7 @@ impl<M: ConnectionManager> Server<M> {
     /// of ShardedEntry which are then sent to other IOx servers based on
     /// the ShardConfig or sent to the local database for buffering in the
     /// WriteBuffer and/or the MutableBuffer if configured.
-    pub async fn write_lines(&self, db_name: &str, lines: &[ParsedLine<'_>]) -> Result<()> {
+    pub async fn write_lines(&self, db_name: &str, lines: Vec<OwnedParsedLine>) -> Result<()> {
         self.require_id()?;
 
         let db_name = DatabaseName::new(db_name).context(InvalidDatabaseName)?;
@@ -536,75 +537,73 @@ impl<M: ConnectionManager> Server<M> {
             .db(&db_name)
             .context(DatabaseNotFound { db_name: &*db_name })?;
 
-        // Split lines into shards while holding a read lock on the sharding config.
-        // Once the lock is released we have a vector of entries, each associated with a
-        // shard id, and an Arc to the mapping between shard ids and node
-        // groups. This map is atomically replaced every time the sharding
-        // config is updated, hence it's safe to use after we release the shard config
-        // lock.
-        let (sharded_entries, shards) = {
+        let default_time = Utc::now();
+
+        // Construct futures for each of the per-shard writes
+        let futures = {
             let rules = db.rules.read();
             let shard_config = &rules.shard_config;
 
-            let sharded_entries = lines_to_sharded_entries(lines, shard_config.as_ref(), &*rules)
-                .context(LineConversion)?;
+            let make_entry = |lines: Vec<OwnedParsedLine>| {
+                lines_to_entry(
+                    lines.iter().map(|x| x.inner()),
+                    &rules.partition_template,
+                    &default_time,
+                )
+                .context(LineConversion)
+            };
 
-            let shards = shard_config
-                .as_ref()
-                .map(|cfg| Arc::clone(&cfg.shards))
-                .unwrap_or_default();
+            match shard_config {
+                Some(shard_config) => {
+                    let mut sharded_lines = BTreeMap::new();
+                    for line in lines {
+                        let shard_id = shard_config.shard(line.inner()).unwrap(); // TODO:
+                        sharded_lines
+                            .entry(shard_id)
+                            .or_insert_with(Vec::new)
+                            .push(line);
+                    }
 
-            (sharded_entries, shards)
+                    sharded_lines
+                        .into_iter()
+                        .map(|(shard_id, lines)| {
+                            let shard = shard_config
+                                .shards
+                                .get(&shard_id)
+                                .context(ShardNotFound { shard_id })?;
+                            let entry = make_entry(lines)?;
+
+                            Ok(match shard {
+                                Shard::Iox(node_group) => {
+                                    let node_group: Vec<_> = node_group.to_owned();
+                                    let db_name = db_name.as_str().to_string();
+                                    async move {
+                                        self.write_entry_downstream(
+                                            db_name.as_str(),
+                                            &node_group,
+                                            entry,
+                                        )
+                                        .await
+                                    }
+                                    .boxed()
+                                }
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                }
+                None => {
+                    let entry = make_entry(lines)?;
+                    vec![self.write_entry_local(db_name.as_str(), &db, entry).boxed()]
+                }
+            }
         };
 
         // Write to all shards in parallel; as soon as one fails return error
         // immediately to the client and abort all other outstanding requests.
         // This can take some time, but we're no longer holding the lock to the shard
         // config.
-        futures_util::future::try_join_all(
-            sharded_entries
-                .into_iter()
-                .map(|e| self.write_sharded_entry(&db_name, &db, Arc::clone(&shards), e)),
-        )
-        .await?;
+        futures_util::future::try_join_all(futures).await?;
 
-        let num_fields: usize = lines.iter().map(|line| line.field_set.len()).sum();
-        let labels = &[
-            metrics::KeyValue::new("status", "ok"),
-            metrics::KeyValue::new("db_name", db_name.to_string()),
-        ];
-        self.metrics
-            .ingest_lines_total
-            .add_with_labels(lines.len() as u64, labels);
-        self.metrics
-            .ingest_fields_total
-            .add_with_labels(num_fields as u64, labels);
-
-        Ok(())
-    }
-
-    async fn write_sharded_entry(
-        &self,
-        db_name: &str,
-        db: &Db,
-        shards: Arc<HashMap<u32, Shard>>,
-        sharded_entry: ShardedEntry,
-    ) -> Result<()> {
-        match sharded_entry.shard_id {
-            Some(shard_id) => {
-                let shard = shards.get(&shard_id).context(ShardNotFound { shard_id })?;
-                match shard {
-                    Shard::Iox(node_group) => {
-                        self.write_entry_downstream(db_name, node_group, sharded_entry.entry)
-                            .await?
-                    }
-                }
-            }
-            None => {
-                self.write_entry_local(&db_name, db, sharded_entry.entry)
-                    .await?
-            }
-        }
         Ok(())
     }
 
@@ -1025,12 +1024,13 @@ mod tests {
     use data_types::database_rules::{
         HashRing, PartitionTemplate, ShardConfig, TemplatePart, NO_SHARD_CONFIG,
     };
-    use influxdb_line_protocol::parse_lines;
+    use influxdb_line_protocol::{parse_lines, parse_lines_owned};
     use metrics::MetricRegistry;
     use object_store::{memory::InMemory, path::ObjectStorePath};
     use query::{frontend::sql::SqlQueryPlanner, Database};
 
     use super::*;
+    use entry::lines_to_sharded_entries;
     use std::sync::atomic::{AtomicBool, Ordering};
     use tempfile::TempDir;
 
@@ -1084,7 +1084,7 @@ mod tests {
         assert!(matches!(resp, Error::IdNotSet));
 
         let lines = parsed_lines("cpu foo=1 10");
-        let resp = server.write_lines("foo", &lines).await.unwrap_err();
+        let resp = server.write_lines("foo", lines).await.unwrap_err();
         assert!(matches!(resp, Error::IdNotSet));
     }
 
@@ -1190,7 +1190,7 @@ mod tests {
 
     async fn create_simple_database<M>(server: &Server<M>, name: impl Into<String>)
     where
-        M: ConnectionManager,
+        M: ConnectionManager + Send + Sync,
     {
         let name = DatabaseName::new(name.into()).unwrap();
 
@@ -1291,9 +1291,9 @@ mod tests {
             .await
             .unwrap();
 
-        let line = "cpu bar=1 10";
-        let lines: Vec<_> = parse_lines(line).map(|l| l.unwrap()).collect();
-        server.write_lines("foo", &lines).await.unwrap();
+        let line = Arc::from("cpu bar=1 10");
+        let lines: Vec<_> = parse_lines_owned(&line).map(|l| l.unwrap()).collect();
+        server.write_lines("foo", lines).await.unwrap();
 
         let db_name = DatabaseName::new("foo").unwrap();
         let db = server.db(&db_name).unwrap();
@@ -1430,17 +1430,23 @@ mod tests {
             });
         }
 
-        let line = "cpu bar=1 10";
-        let lines: Vec<_> = parse_lines(line).map(|l| l.unwrap()).collect();
+        let line = Arc::from("cpu bar=1 10");
+        let lines: Vec<_> = parse_lines_owned(&line).map(|l| l.unwrap()).collect();
 
-        let err = server.write_lines(&db_name, &lines).await.unwrap_err();
+        let err = server
+            .write_lines(&db_name, lines.clone())
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, Error::NoRemoteConfigured { node_group } if node_group == remote_ids)
         );
 
         // one remote is configured but it's down and we'll get connection error
         server.update_remote(bad_remote_id, BAD_REMOTE_ADDR.into());
-        let err = server.write_lines(&db_name, &lines).await.unwrap_err();
+        let err = server
+            .write_lines(&db_name, lines.clone())
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             Error::NoRemoteReachable { errors } if matches!(
@@ -1460,7 +1466,7 @@ mod tests {
         // probability both the remotes will get hit.
         for _ in 0..100 {
             server
-                .write_lines(&db_name, &lines)
+                .write_lines(&db_name, lines.clone())
                 .await
                 .expect("cannot write lines");
         }
@@ -1488,9 +1494,9 @@ mod tests {
             .await
             .unwrap();
 
-        let line = "cpu bar=1 10";
-        let lines: Vec<_> = parse_lines(line).map(|l| l.unwrap()).collect();
-        server.write_lines(&db_name, &lines).await.unwrap();
+        let line = Arc::from("cpu bar=1 10");
+        let lines: Vec<_> = parse_lines_owned(&line).map(|l| l.unwrap()).collect();
+        server.write_lines(&db_name, lines).await.unwrap();
 
         // start the close (note this is not an async)
         let partition_key = "";
@@ -1623,8 +1629,10 @@ mod tests {
         }
     }
 
-    fn parsed_lines(lp: &str) -> Vec<ParsedLine<'_>> {
-        parse_lines(lp).map(|l| l.unwrap()).collect()
+    fn parsed_lines(lp: &str) -> Vec<OwnedParsedLine> {
+        parse_lines_owned(&Arc::from(lp))
+            .map(|l| l.unwrap())
+            .collect()
     }
 
     fn spawn_worker<M>(server: Arc<Server<M>>, token: CancellationToken) -> JoinHandle<()>

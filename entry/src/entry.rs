@@ -76,36 +76,53 @@ pub fn lines_to_sharded_entries(
             Some(s) => Some(s.shard(line).context(GeneratingShardId)?),
             None => None,
         };
+
+        sharded_lines
+            .entry(shard_id)
+            .or_insert_with(Vec::new)
+            .push(line);
+    }
+
+    let sharded_entries = sharded_lines
+        .into_iter()
+        .map(|(shard_id, lines)| {
+            Ok(ShardedEntry {
+                shard_id,
+                entry: lines_to_entry(lines, partitioner, &default_time)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(sharded_entries)
+}
+
+/// Builds an Entry from a set of lines
+pub fn lines_to_entry<'a, 'b: 'a>(
+    lines: impl IntoIterator<Item = &'a ParsedLine<'b>>,
+    partitioner: &impl Partitioner,
+    default_time: &DateTime<Utc>,
+) -> Result<Entry> {
+    let mut partitions = BTreeMap::default();
+    for line in lines {
         let partition_key = partitioner
             .partition_key(line, &default_time)
             .context(GeneratingPartitionKey)?;
         let table = line.series.measurement.as_str();
 
-        sharded_lines
-            .entry(shard_id)
-            .or_insert_with(BTreeMap::new)
+        partitions
             .entry(partition_key)
             .or_insert_with(BTreeMap::new)
             .entry(table)
             .or_insert_with(Vec::new)
             .push(line);
     }
-
-    let default_time = Utc::now();
-
-    let sharded_entries = sharded_lines
-        .into_iter()
-        .map(|(shard_id, partitions)| build_sharded_entry(shard_id, partitions, &default_time))
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(sharded_entries)
+    build_entry(partitions, default_time)
 }
 
-fn build_sharded_entry(
-    shard_id: Option<ShardId>,
+fn build_entry(
     partitions: BTreeMap<String, BTreeMap<&str, Vec<&ParsedLine<'_>>>>,
     default_time: &DateTime<Utc>,
-) -> Result<ShardedEntry> {
+) -> Result<Entry> {
     let mut fbb = flatbuffers::FlatBufferBuilder::new_with_capacity(1024);
 
     let partition_writes = partitions
@@ -136,7 +153,7 @@ fn build_sharded_entry(
     let entry = Entry::try_from(data.split_off(idx))
         .expect("Flatbuffer data just constructed should be valid");
 
-    Ok(ShardedEntry { shard_id, entry })
+    Ok(entry)
 }
 
 fn build_partition_write<'a>(
