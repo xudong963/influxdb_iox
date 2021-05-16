@@ -4,11 +4,11 @@ use std::sync::Arc;
 use regex::Regex;
 
 use data_types::database_rules::{
-    HashRing, Matcher, MatcherToShard, NodeGroup, Shard, ShardConfig,
+    HashRing, KinesisStream, Matcher, MatcherToShard, NodeGroup, Shard, ShardConfig,
 };
 use data_types::server_id::ServerId;
 
-use crate::google::{FieldViolation, FieldViolationExt, FromField};
+use crate::google::{FieldViolation, FieldViolationExt, FromField, FromFieldString};
 use crate::influxdata::iox::management::v1 as management;
 
 impl From<ShardConfig> for management::ShardConfig {
@@ -114,6 +114,7 @@ impl From<Shard> for management::Shard {
     fn from(shard: Shard) -> Self {
         let sink = match shard {
             Shard::Iox(node_group) => management::shard::Sink::Iox(node_group.into()),
+            Shard::Kinesis(stream) => management::shard::Sink::Kinesis(stream.into()),
         };
         management::Shard { sink: Some(sink) }
     }
@@ -125,7 +126,8 @@ impl TryFrom<management::Shard> for Shard {
     fn try_from(proto: management::Shard) -> Result<Self, Self::Error> {
         let sink = proto.sink.ok_or_else(|| FieldViolation::required(""))?;
         Ok(match sink {
-            management::shard::Sink::Iox(node_group) => Shard::Iox(node_group.scope("node_group")?),
+            management::shard::Sink::Iox(node_group) => Shard::Iox(node_group.scope("iox")?),
+            management::shard::Sink::Kinesis(stream) => Shard::Kinesis(stream.scope("kinesis")?),
         })
     }
 }
@@ -155,6 +157,22 @@ impl TryFrom<management::NodeGroup> for NodeGroup {
                 })
             })
             .collect()
+    }
+}
+
+impl From<KinesisStream> for management::KinesisStream {
+    fn from(stream: KinesisStream) -> Self {
+        Self { arn: stream.arn }
+    }
+}
+
+impl TryFrom<management::KinesisStream> for KinesisStream {
+    type Error = FieldViolation;
+
+    fn try_from(proto: management::KinesisStream) -> Result<Self, Self::Error> {
+        Ok(Self {
+            arn: proto.arn.required("arn")?,
+        })
     }
 }
 

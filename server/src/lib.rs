@@ -105,6 +105,7 @@ use generated_types::database_rules::{decode_database_rules, encode_database_rul
 use influxdb_iox_client::{connection::Builder, write};
 use rand::seq::SliceRandom;
 use std::collections::{BTreeMap, HashMap};
+use stream::kinesis::KinesisClient;
 
 pub mod buffer;
 mod config;
@@ -178,6 +179,8 @@ pub enum Error {
     },
     #[snafu(display("remote error: {}", source))]
     RemoteError { source: ConnectionManagerError },
+    #[snafu(display("kinesis error: {}", source))]
+    KinesisError { source: stream::kinesis::Error },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -226,15 +229,23 @@ pub struct ServerConfig {
     /// The `ObjectStore` instance to use for persistence
     object_store: Arc<ObjectStore>,
 
+    /// The `KinesisClient` to use if configured
+    kinesis_client: Arc<KinesisClient>,
+
     metric_registry: Arc<MetricRegistry>,
 }
 
 impl ServerConfig {
     /// Create a new config using the specified store.
-    pub fn new(object_store: Arc<ObjectStore>, metric_registry: Arc<MetricRegistry>) -> Self {
+    pub fn new(
+        object_store: Arc<ObjectStore>,
+        kinesis_client: Arc<KinesisClient>,
+        metric_registry: Arc<MetricRegistry>,
+    ) -> Self {
         Self {
             num_worker_threads: None,
             object_store,
+            kinesis_client,
             metric_registry,
         }
     }
@@ -362,6 +373,9 @@ pub struct Server<M: ConnectionManager> {
     jobs: Arc<JobRegistry>,
     pub metrics: Arc<ServerMetrics>,
 
+    /// The kinesis client to use for kinesis shards
+    kinesis_client: Arc<KinesisClient>,
+
     /// The metrics registry associated with the server. This is needed not for
     /// recording telemetry, but because the server hosts the /metric endpoint
     /// and populates the endpoint with this data.
@@ -388,6 +402,7 @@ impl<M: ConnectionManager + Send + Sync> Server<M> {
             num_worker_threads,
             object_store,
             // to test the metrics provide a different registry to the `ServerConfig`.
+            kinesis_client,
             metric_registry,
         } = config;
         let num_worker_threads = num_worker_threads.unwrap_or_else(num_cpus::get);
@@ -400,6 +415,7 @@ impl<M: ConnectionManager + Send + Sync> Server<M> {
             exec: Arc::new(Executor::new(num_worker_threads)),
             jobs,
             metrics: Arc::new(ServerMetrics::new(Arc::clone(&metric_registry))),
+            kinesis_client,
             registry: Arc::clone(&metric_registry),
         }
     }
@@ -571,10 +587,10 @@ impl<M: ConnectionManager + Send + Sync> Server<M> {
                                 .shards
                                 .get(&shard_id)
                                 .context(ShardNotFound { shard_id })?;
-                            let entry = make_entry(lines)?;
 
                             Ok(match shard {
                                 Shard::Iox(node_group) => {
+                                    let entry = make_entry(lines)?;
                                     let node_group: Vec<_> = node_group.to_owned();
                                     let db_name = db_name.as_str().to_string();
                                     async move {
@@ -584,6 +600,14 @@ impl<M: ConnectionManager + Send + Sync> Server<M> {
                                             entry,
                                         )
                                         .await
+                                    }
+                                    .boxed()
+                                }
+                                Shard::Kinesis(stream) => {
+                                    let client = Arc::clone(&self.kinesis_client);
+                                    let arn = stream.arn.clone();
+                                    async move {
+                                        client.handle_write(arn, lines).await.context(KinesisError)
                                     }
                                     .boxed()
                                 }
@@ -800,21 +824,11 @@ impl<M: ConnectionManager + Send + Sync> Server<M> {
             }
         }
 
-        info!("shutting down background worker");
+        info!("shutting down background workers");
+        self.config.drain().await;
 
-        let join = self.config.drain().fuse();
-        pin_mut!(join);
-
-        // Keep running reclaim whilst shutting down in case something
-        // is waiting on a tracker to complete
-        loop {
-            self.jobs.inner.lock().reclaim();
-
-            futures::select! {
-                _ = interval.tick().fuse() => {},
-                _ = join => break
-            }
-        }
+        info!("shutting down kinesis client");
+        self.kinesis_client.drain().await;
 
         info!("draining tracker registry");
 
@@ -1044,6 +1058,7 @@ mod tests {
             test_registry,
             ServerConfig::new(
                 Arc::new(object_store),
+                Arc::new(KinesisClient::new()),
                 registry, // new registry ensures test isolation of metrics
             )
             .with_num_worker_threads(1),
@@ -1145,8 +1160,12 @@ mod tests {
         store.list_with_delimiter(&store.new_path()).await.unwrap();
 
         let manager = TestConnectionManager::new();
-        let config2 =
-            ServerConfig::new(store, Arc::new(MetricRegistry::new())).with_num_worker_threads(1);
+        let config2 = ServerConfig::new(
+            store,
+            Arc::new(KinesisClient::new()),
+            Arc::new(MetricRegistry::new()),
+        )
+        .with_num_worker_threads(1);
         let server2 = Server::new(manager, config2);
         server2.set_id(ServerId::try_from(1).unwrap()).unwrap();
         server2.load_database_configs().await.unwrap();

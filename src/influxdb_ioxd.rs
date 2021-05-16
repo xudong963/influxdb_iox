@@ -12,6 +12,7 @@ use server::{
 };
 use snafu::{ResultExt, Snafu};
 use std::{convert::TryFrom, fs, net::SocketAddr, path::PathBuf, sync::Arc};
+use stream::kinesis::KinesisClient;
 use tokio::time::Duration;
 
 mod http;
@@ -122,8 +123,12 @@ pub async fn main(config: Config) -> Result<()> {
 
     let object_store = ObjectStore::try_from(&config)?;
     let object_storage = Arc::new(object_store);
+
+    let kinesis_client = KinesisClient::try_from(&config)?;
+    let kinesis_client = Arc::new(kinesis_client);
+
     let metric_registry = Arc::new(metrics::MetricRegistry::new());
-    let server_config = AppServerConfig::new(object_storage, metric_registry);
+    let server_config = AppServerConfig::new(object_storage, kinesis_client, metric_registry);
 
     let server_config = if let Some(n) = config.num_worker_threads {
         info!(
@@ -391,6 +396,14 @@ impl TryFrom<&Config> for ObjectStore {
                 .fail(),
             },
         }
+    }
+}
+
+impl TryFrom<&Config> for KinesisClient {
+    type Error = Error;
+
+    fn try_from(_value: &Config) -> Result<Self, Self::Error> {
+        Ok(KinesisClient::new())
     }
 }
 

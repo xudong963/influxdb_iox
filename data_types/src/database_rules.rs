@@ -403,6 +403,7 @@ pub struct ShardConfig {
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum Shard {
     Iox(NodeGroup),
+    Kinesis(KinesisStream), // A kinesis stream ARN
 }
 
 struct LineHasher<'a, 'b, 'c> {
@@ -457,6 +458,12 @@ pub struct MatcherToShard {
 
 /// A collection of IOx nodes
 pub type NodeGroup = Vec<ServerId>;
+
+/// A kinesis stream
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub struct KinesisStream {
+    pub arn: String,
+}
 
 /// HashRing is a rule for creating a hash key for a row and mapping that to
 /// an individual node on a ring.

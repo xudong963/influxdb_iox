@@ -819,6 +819,7 @@ mod tests {
     use object_store::{memory::InMemory, ObjectStore};
     use serde::de::DeserializeOwned;
     use server::{db::Db, ConnectionManagerImpl, ServerConfig as AppServerConfig};
+    use stream::kinesis::KinesisClient;
 
     fn config() -> (metrics::TestMetricRegistry, AppServerConfig) {
         let registry = Arc::new(metrics::MetricRegistry::new());
@@ -827,6 +828,7 @@ mod tests {
             test_registry,
             AppServerConfig::new(
                 Arc::new(ObjectStore::new_in_memory(InMemory::new())),
+                Arc::new(KinesisClient::new()),
                 registry,
             )
             .with_num_worker_threads(1),
