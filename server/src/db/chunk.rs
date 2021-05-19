@@ -200,6 +200,15 @@ impl DbChunk {
     pub fn table_name(&self) -> Arc<str> {
         Arc::clone(&self.table_name)
     }
+
+    /// Return the number of rows
+    pub fn rows(&self) -> usize {
+        match &self.state {
+            State::MutableBuffer { chunk, .. } => chunk.rows(),
+            State::ReadBuffer { chunk, .. } => chunk.rows() as usize,
+            State::ParquetFile { chunk, .. } => chunk.rows(),
+        }
+    }
 }
 
 impl PartitionChunk for DbChunk {
