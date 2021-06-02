@@ -29,6 +29,12 @@ pub enum Error {
 
     #[snafu(display("unsupported column operation on {}: {}", column_name, msg))]
     UnsupportedColumnOperation { msg: String, column_name: String },
+
+    #[snafu(display("column in predicate unknown: '{}' {:?}", column, predicate))]
+    UnknownPredicateColumn {
+        column: String,
+        predicate: Predicate,
+    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -250,7 +256,10 @@ impl Table {
     //
     // N.B the table read lock is only held as long as it takes to determine
     // with meta data whether each row group may satisfy the predicate.
-    fn filter_row_groups(&self, predicate: &Predicate) -> (Arc<MetaData>, Vec<Arc<RowGroup>>) {
+    fn filter_row_groups(
+        &self,
+        predicate: &Predicate,
+    ) -> Result<(Arc<MetaData>, Vec<Arc<RowGroup>>)> {
         let table_data = self.table_data.read();
         let mut row_groups = Vec::with_capacity(table_data.data.len());
 
@@ -264,7 +273,7 @@ impl Table {
             row_groups.push(Arc::clone(&rg));
         }
 
-        (Arc::clone(&table_data.meta), row_groups)
+        Ok((Arc::clone(&table_data.meta), row_groups))
     }
 
     /// Select data for the specified column selections with the provided
@@ -280,10 +289,10 @@ impl Table {
         &'a self,
         columns: &Selection<'_>,
         predicate: &Predicate,
-    ) -> ReadFilterResults {
+    ) -> Result<ReadFilterResults> {
         // identify row groups where time range and predicates match could match
         // the predicate. Get a snapshot of those and the meta-data.
-        let (meta, row_groups) = self.filter_row_groups(predicate);
+        let (meta, row_groups) = self.filter_row_groups(predicate)?;
 
         let schema = ResultSchema {
             select_columns: match columns {
@@ -294,11 +303,11 @@ impl Table {
         };
 
         // TODO(edd): I think I can remove `predicates` from the results
-        ReadFilterResults {
+        Ok(ReadFilterResults {
             predicate: predicate.clone(),
             schema,
             row_groups,
-        }
+        })
     }
 
     /// Returns an iterable collection of data in group columns and aggregate
@@ -316,7 +325,7 @@ impl Table {
         group_columns: &'input Selection<'_>,
         aggregates: &'input [(ColumnName<'input>, AggregateType)],
     ) -> Result<ReadAggregateResults> {
-        let (meta, row_groups) = self.filter_row_groups(&predicate);
+        let (meta, row_groups) = self.filter_row_groups(&predicate)?;
 
         // Filter out any column names that we do not have data for.
         let schema = ResultSchema {
@@ -441,7 +450,7 @@ impl Table {
         predicate: &Predicate,
         columns: Selection<'_>,
         mut dst: BTreeSet<String>,
-    ) -> BTreeSet<String> {
+    ) -> Result<BTreeSet<String>> {
         let table_data = self.table_data.read();
 
         // Short circuit execution if we have already got all of this table's
@@ -452,7 +461,7 @@ impl Table {
             .keys()
             .all(|name| dst.contains(name))
         {
-            return dst;
+            return Ok(dst);
         }
 
         // Identify row groups where time range and predicates match could match
@@ -462,12 +471,12 @@ impl Table {
         // ok, but if it turns out it's not then we can move the
         // `filter_row_groups` logic into here and not take the second read
         // lock.
-        let (_, row_groups) = self.filter_row_groups(predicate);
+        let (_, row_groups) = self.filter_row_groups(predicate)?;
         for row_group in row_groups {
             row_group.column_names(predicate, columns, &mut dst);
         }
 
-        dst
+        Ok(dst)
     }
 
     /// Returns the distinct set of column values for each provided column,
@@ -481,7 +490,7 @@ impl Table {
         columns: &[ColumnName<'_>],
         mut dst: BTreeMap<String, BTreeSet<String>>,
     ) -> Result<BTreeMap<String, BTreeSet<String>>> {
-        let (meta, row_groups) = self.filter_row_groups(predicate);
+        let (meta, row_groups) = self.filter_row_groups(predicate)?;
 
         // Validate that only supported columns present in `columns`.
         for (name, (ct, _)) in columns.iter().zip(meta.schema_for_column_names(columns)) {
@@ -1232,7 +1241,9 @@ mod test {
 
         // Get all the results
         let predicate = Predicate::with_time_range(&[], 1, 31);
-        let results = table.read_filter(&Selection::Some(&["time", "count", "region"]), &predicate);
+        let results = table
+            .read_filter(&Selection::Some(&["time", "count", "region"]), &predicate)
+            .unwrap();
 
         // check the column types
         let exp_schema = ResultSchema {
@@ -1278,7 +1289,9 @@ mod test {
             Predicate::with_time_range(&[BinaryExpr::from(("region", "!=", "south"))], 1, 25);
 
         // Apply a predicate `WHERE "region" != "south"`
-        let results = table.read_filter(&Selection::Some(&["time", "region"]), &predicate);
+        let results = table
+            .read_filter(&Selection::Some(&["time", "region"]), &predicate)
+            .unwrap();
 
         let exp_schema = ResultSchema {
             select_columns: vec![
@@ -1491,7 +1504,9 @@ west,host-b,100
         // NULL,   400
 
         let mut dst: BTreeSet<String> = BTreeSet::new();
-        dst = table.column_names(&Predicate::default(), Selection::All, dst);
+        dst = table
+            .column_names(&Predicate::default(), Selection::All, dst)
+            .unwrap();
 
         assert_eq!(
             dst.iter().cloned().collect::<Vec<_>>(),
@@ -1499,7 +1514,9 @@ west,host-b,100
         );
 
         // re-run and get the same answer
-        dst = table.column_names(&Predicate::default(), Selection::All, dst);
+        dst = table
+            .column_names(&Predicate::default(), Selection::All, dst)
+            .unwrap();
         assert_eq!(
             dst.iter().cloned().collect::<Vec<_>>(),
             vec!["region".to_owned(), "time".to_owned()],
@@ -1507,22 +1524,26 @@ west,host-b,100
 
         // include a predicate that doesn't match any region rows and still get
         // region from previous results.
-        dst = table.column_names(
-            &Predicate::new(vec![BinaryExpr::from(("time", ">=", 300_i64))]),
-            Selection::All,
-            dst,
-        );
+        dst = table
+            .column_names(
+                &Predicate::new(vec![BinaryExpr::from(("time", ">=", 300_i64))]),
+                Selection::All,
+                dst,
+            )
+            .unwrap();
         assert_eq!(
             dst.iter().cloned().collect::<Vec<_>>(),
             vec!["region".to_owned(), "time".to_owned()],
         );
 
         // wipe the destination buffer and region won't show up
-        dst = table.column_names(
-            &Predicate::new(vec![BinaryExpr::from(("time", ">=", 300_i64))]),
-            Selection::All,
-            BTreeSet::new(),
-        );
+        dst = table
+            .column_names(
+                &Predicate::new(vec![BinaryExpr::from(("time", ">=", 300_i64))]),
+                Selection::All,
+                BTreeSet::new(),
+            )
+            .unwrap();
         assert_eq!(
             dst.iter().cloned().collect::<Vec<_>>(),
             vec!["time".to_owned()],
