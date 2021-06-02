@@ -12,11 +12,17 @@ use arrow::record_batch::RecordBatch;
 use data_types::{chunk_metadata::ChunkColumnSummary, partition_metadata::TableSummary};
 use internal_types::selection::Selection;
 
-use crate::schema::{AggregateType, ColumnType, LogicalDataType, ResultSchema};
-use crate::value::{OwnedValue, Scalar, Value};
 use crate::{
     column,
     row_group::{self, ColumnName, Predicate, RowGroup},
+};
+use crate::{
+    row_group::Literal,
+    value::{OwnedValue, Scalar, Value},
+};
+use crate::{
+    schema::{AggregateType, ColumnType, LogicalDataType, ResultSchema},
+    BinaryExpr,
 };
 
 #[derive(Debug, Snafu)]
@@ -29,12 +35,6 @@ pub enum Error {
 
     #[snafu(display("unsupported column operation on {}: {}", column_name, msg))]
     UnsupportedColumnOperation { msg: String, column_name: String },
-
-    #[snafu(display("column in predicate unknown: '{}' {:?}", column, predicate))]
-    UnknownPredicateColumn {
-        column: String,
-        predicate: Predicate,
-    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -261,6 +261,10 @@ impl Table {
         predicate: &Predicate,
     ) -> Result<(Arc<MetaData>, Vec<Arc<RowGroup>>)> {
         let table_data = self.table_data.read();
+
+        // validate predicate can be applied to table based on schema.
+        table_data.meta.validate_exprs(predicate.iter())?;
+
         let mut row_groups = Vec::with_capacity(table_data.data.len());
 
         'rowgroup: for rg in table_data.data.iter() {
@@ -575,6 +579,47 @@ impl MetaData {
             columns: rg.metadata().columns.clone(),
             column_names: rg.metadata().column_names.clone(),
         }
+    }
+
+    /// Determine, based on the table meta data, whether all of the provided
+    /// expressions can be applied. An error is returned if any of the
+    /// expressions cannot be applied to the table data.
+    pub fn validate_exprs<'a>(&self, iter: impl IntoIterator<Item = &'a BinaryExpr>) -> Result<()> {
+        iter.into_iter()
+            .try_for_each(|expr| match self.columns.get(expr.column()) {
+                Some(col_meta) => match (col_meta.logical_data_type, expr.literal()) {
+                    (LogicalDataType::Integer, Literal::Integer(_))
+                    | (LogicalDataType::Integer, Literal::Unsigned(_))
+                    | (LogicalDataType::Integer, Literal::Float(_))
+                    | (LogicalDataType::Unsigned, Literal::Integer(_))
+                    | (LogicalDataType::Unsigned, Literal::Unsigned(_))
+                    | (LogicalDataType::Unsigned, Literal::Float(_))
+                    | (LogicalDataType::Float, Literal::Integer(_))
+                    | (LogicalDataType::Float, Literal::Unsigned(_))
+                    | (LogicalDataType::Float, Literal::Float(_))
+                    | (LogicalDataType::String, Literal::String(_))
+                    | (LogicalDataType::Binary, Literal::String(_))
+                    | (LogicalDataType::Boolean, Literal::Boolean(_)) => Ok(()),
+                    _ => {
+                        return UnsupportedColumnOperation {
+                            column_name: expr.column().to_owned(),
+                            msg: format!(
+                                "cannot compare column type {} to expression literal {:?}",
+                                col_meta.logical_data_type,
+                                expr.literal()
+                            ),
+                        }
+                        .fail()
+                    }
+                },
+                None => {
+                    return UnsupportedColumnOperation {
+                        column_name: expr.column().to_owned(),
+                        msg: "column does not exist",
+                    }
+                    .fail()
+                }
+            })
     }
 
     /// Returns the estimated size in bytes of the `MetaData` struct and all of
@@ -991,6 +1036,8 @@ impl std::fmt::Display for DisplayReadAggregateResults<'_> {
 
 #[cfg(test)]
 mod test {
+    use arrow::array::BooleanArray;
+
     use super::*;
 
     use crate::column::Column;
@@ -1044,6 +1091,80 @@ mod test {
                 OwnedValue::String("west".to_owned())
             )
         );
+    }
+
+    #[test]
+    fn validate_expressions() {
+        let time = ColumnType::Time(Column::from(&[1_i64][..]));
+        let col_a = ColumnType::Field(Column::from(&[1_i64][..]));
+        let col_b = ColumnType::Field(Column::from(&[1_u64][..]));
+        let col_c = ColumnType::Field(Column::from(&[1_f64][..]));
+        let col_d = ColumnType::Field(Column::from(&["south"][..]));
+        let col_e = ColumnType::Field(Column::from(BooleanArray::from(vec![true])));
+
+        let columns = vec![
+            ("time".to_string(), time),
+            ("i64_col".to_string(), col_a),
+            ("u64_col".to_string(), col_b),
+            ("f64_col".to_string(), col_c),
+            ("str_col".to_string(), col_d),
+            ("bool_col".to_string(), col_e),
+        ];
+        let row_group = RowGroup::new(1, columns);
+
+        let table = Table::new("cpu".to_owned(), row_group);
+
+        let predicate = Predicate::default();
+        assert!(table.meta().validate_exprs(predicate.iter()).is_ok());
+
+        // valid predicates
+        let predicates = vec![
+            // exact logical types
+            BinaryExpr::from(("time", "=", 100_i64)),
+            BinaryExpr::from(("i64_col", "=", 100_i64)),
+            BinaryExpr::from(("u64_col", "=", 100_u64)),
+            BinaryExpr::from(("f64_col", "=", 100.0)),
+            BinaryExpr::from(("str_col", "=", "hello")),
+            BinaryExpr::from(("bool_col", "=", true)),
+            // compatible logical types
+            BinaryExpr::from(("time", "=", 100_u64)),
+            BinaryExpr::from(("time", "=", 100.0)),
+            BinaryExpr::from(("i64_col", "=", 100_u64)),
+            BinaryExpr::from(("i64_col", "=", 100.0)),
+            BinaryExpr::from(("u64_col", "=", 100_i64)),
+            BinaryExpr::from(("u64_col", "=", 100.0)),
+            BinaryExpr::from(("f64_col", "=", 100_i64)),
+            BinaryExpr::from(("f64_col", "=", 100_u64)),
+        ];
+
+        for exprs in predicates {
+            let predicate = Predicate::new(vec![exprs]);
+            assert!(table.meta().validate_exprs(predicate.iter()).is_ok());
+        }
+
+        // invalid predicates
+        let predicates = vec![
+            vec![BinaryExpr::from(("time", "=", "hello"))],
+            vec![BinaryExpr::from(("time", "=", true))],
+            vec![BinaryExpr::from(("i64_col", "=", "hello"))],
+            vec![BinaryExpr::from(("i64_col", "=", false))],
+            vec![BinaryExpr::from(("u64_col", "=", "hello"))],
+            vec![BinaryExpr::from(("u64_col", "=", false))],
+            vec![BinaryExpr::from(("f64_col", "=", "hello"))],
+            vec![BinaryExpr::from(("f64_col", "=", false))],
+            vec![BinaryExpr::from(("str_col", "=", 10_i64))],
+            vec![BinaryExpr::from(("bool_col", "=", "true"))],
+            // mixture valid/invalid
+            vec![
+                BinaryExpr::from(("time", "=", 100_u64)),
+                BinaryExpr::from(("i64_col", "=", "not good")),
+            ],
+        ];
+
+        for exprs in predicates {
+            let predicate = Predicate::new(exprs);
+            assert!(table.meta().validate_exprs(predicate.iter()).is_err());
+        }
     }
 
     #[test]

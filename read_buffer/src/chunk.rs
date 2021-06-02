@@ -1318,6 +1318,14 @@ mod test {
 
         // No more data
         assert!(itr.next().is_none());
+
+        // invalid predicate
+        let predicate =
+            Predicate::with_time_range(&[BinaryExpr::from(("env", "=", 22.3))], 100, 205); // filter on time
+
+        assert!(chunk
+            .read_filter("Coolverine", predicate, Selection::All)
+            .is_err());
     }
 
     #[test]
