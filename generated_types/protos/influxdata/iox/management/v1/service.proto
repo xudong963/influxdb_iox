@@ -256,7 +256,7 @@ message ServerStatus {
   // If present, the server reports a global error condition.
   Error error = 2;
 
-  // If `initialized` is true, this contains a complete list of databases.
+  // If `initialized` is true, this contains a complete list of known databases, regardless of their state.
   repeated DatabaseStatus database_statuses = 3;
 }
 
@@ -266,6 +266,9 @@ message DatabaseStatus {
 
   // If present, the database reports an error condition.
   Error error = 2;
+
+  // Database is initialized and fully usable.
+  bool initialized = 3;
 }
 
 message Error {

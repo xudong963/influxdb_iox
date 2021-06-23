@@ -383,11 +383,17 @@ where
                 .db_names_sorted()
                 .into_iter()
                 .map(|db_name| {
+                    let db_name_checked = DatabaseName::new(&db_name).expect("invalid DB name?!");
                     let error = self.server.error_database(&db_name).map(|e| ProtobufError {
                         message: e.to_string(),
                     });
+                    let initialized = self.server.db(&db_name_checked).is_some();
 
-                    DatabaseStatus { db_name, error }
+                    DatabaseStatus {
+                        db_name,
+                        error,
+                        initialized,
+                    }
                 })
                 .collect()
         } else {
