@@ -9,9 +9,9 @@ pub fn default_server_error_handler(error: server::Error) -> tonic::Status {
 
     match error {
         Error::GetIdError { .. } => PreconditionViolation {
-            category: "Writer ID".to_string(),
+            category: "Server ID".to_string(),
             subject: "influxdata.com/iox".to_string(),
-            description: "Writer ID must be set".to_string(),
+            description: "Server ID must be set".to_string(),
         }
         .into(),
         Error::ServerNotInitialized{server_id} => tonic::Status::unavailable(
@@ -45,6 +45,11 @@ pub fn default_server_error_handler(error: server::Error) -> tonic::Status {
         }
         .into(),
         Error::RemoteError { source } => tonic::Status::unavailable(source.to_string()),
+        Error::TokenError {source} => PreconditionViolation {
+            category: "token".to_string(),
+            subject: "influxdata.com/iox".to_string(),
+            description: source.description().to_string(),
+        }.into(),
         error => {
             error!(?error, "Unexpected error");
             InternalError {}.into()

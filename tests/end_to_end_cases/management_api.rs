@@ -773,8 +773,13 @@ async fn test_wipe_preserved_catalog() {
 
     let db_name = rand_name();
 
+    management_client
+        .wipe_persisted_catalog(&db_name, None)
+        .await
+        .expect_err("operation w/o token must fail");
+    let token = fixture.token().await.unwrap();
     let operation = management_client
-        .wipe_persisted_catalog(&db_name)
+        .wipe_persisted_catalog(&db_name, Some(token))
         .await
         .expect("wipe persisted catalog");
 

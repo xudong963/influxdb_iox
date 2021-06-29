@@ -90,6 +90,8 @@ use influxdb_line_protocol::ParsedLine;
 use metrics::{KeyValue, MetricObserverBuilder, MetricRegistry};
 use object_store::{ObjectStore, ObjectStoreApi};
 use query::{exec::Executor, DatabaseStore};
+use token_challenge::hmac::HmacTokenGenerator;
+use token_challenge::log::verify_or_log_token;
 use tracker::{TaskId, TaskRegistration, TaskRegistryWithHistory, TaskTracker, TrackedFutureExt};
 
 pub use crate::config::RemoteTemplate;
@@ -210,6 +212,9 @@ pub enum Error {
 
     #[snafu(display("cannot create write buffer for writing: {}", source))]
     CreatingWriteBufferForWriting { source: DatabaseError },
+
+    #[snafu(display("cannot perform action due to token error: {}", source))]
+    TokenError { source: token_challenge::log::Error },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -389,6 +394,7 @@ pub struct Server<M: ConnectionManager> {
     pub registry: Arc<metrics::MetricRegistry>,
 
     init_status: Arc<InitStatus>,
+    token_generator: HmacTokenGenerator,
 }
 
 #[derive(Debug)]
@@ -432,6 +438,7 @@ where
             metrics: Arc::new(ServerMetrics::new(Arc::clone(&metric_registry))),
             registry: Arc::clone(&metric_registry),
             init_status: Arc::new(InitStatus::new()),
+            token_generator: HmacTokenGenerator::new(60),
         }
     }
 
@@ -843,7 +850,17 @@ where
     pub fn wipe_preserved_catalog(
         &self,
         db_name: DatabaseName<'static>,
+        token: Option<&str>,
     ) -> Result<TaskTracker<Job>> {
+        let server_id = self.require_id()?;
+        verify_or_log_token(
+            &self.token_generator,
+            &format!("wipe_preserved_catalog@server={},db={}", server_id, db_name),
+            &format!("wipe preserved catalog for database {}", db_name),
+            token,
+        )
+        .context(TokenError)?;
+
         if self.config.db(&db_name).is_some() {
             return Err(Error::DatabaseAlreadyExists {
                 db_name: db_name.to_string(),
@@ -856,7 +873,6 @@ where
         let object_store = Arc::clone(&self.store);
         let config = Arc::clone(&self.config);
         let exec = Arc::clone(&self.exec);
-        let server_id = self.require_id()?;
         let init_status = Arc::clone(&self.init_status);
         let task = async move {
             init_status
@@ -2001,7 +2017,7 @@ mod tests {
         // cannot wipe if server ID is not set
         assert_eq!(
             server
-                .wipe_preserved_catalog(db_name_non_existing.clone())
+                .wipe_preserved_catalog(db_name_non_existing.clone(), None)
                 .unwrap_err()
                 .to_string(),
             "cannot get id: unable to use server until id is set"
@@ -2011,9 +2027,12 @@ mod tests {
         server.maybe_initialize_server().await;
 
         // 1. cannot wipe if DB exists
+        let err = server
+            .wipe_preserved_catalog(db_name_existing.clone(), None)
+            .unwrap_err();
         assert_eq!(
             server
-                .wipe_preserved_catalog(db_name_existing.clone())
+                .wipe_preserved_catalog(db_name_existing.clone(), Some(&get_token_from_error(&err)))
                 .unwrap_err()
                 .to_string(),
             "database already exists"
@@ -2036,8 +2055,14 @@ mod tests {
         )
         .await
         .unwrap();
+        let err = server
+            .wipe_preserved_catalog(db_name_non_existing.clone(), None)
+            .unwrap_err();
         let tracker = server
-            .wipe_preserved_catalog(db_name_non_existing.clone())
+            .wipe_preserved_catalog(
+                db_name_non_existing.clone(),
+                Some(&get_token_from_error(&err)),
+            )
             .unwrap();
         let metadata = tracker.metadata();
         let expected_metadata = Job::WipePreservedCatalog {
@@ -2057,8 +2082,14 @@ mod tests {
 
         // 3. wipe DB with broken rules file, this won't bring DB back to life
         assert!(server.error_database(&db_name_rules_broken).is_some());
+        let err = server
+            .wipe_preserved_catalog(db_name_rules_broken.clone(), None)
+            .unwrap_err();
         let tracker = server
-            .wipe_preserved_catalog(db_name_rules_broken.clone())
+            .wipe_preserved_catalog(
+                db_name_rules_broken.clone(),
+                Some(&get_token_from_error(&err)),
+            )
             .unwrap();
         let metadata = tracker.metadata();
         let expected_metadata = Job::WipePreservedCatalog {
@@ -2078,8 +2109,14 @@ mod tests {
 
         // 4. wipe DB with broken catalog, this will bring the DB back to life
         assert!(server.error_database(&db_name_catalog_broken).is_some());
+        let err = server
+            .wipe_preserved_catalog(db_name_catalog_broken.clone(), None)
+            .unwrap_err();
         let tracker = server
-            .wipe_preserved_catalog(db_name_catalog_broken.clone())
+            .wipe_preserved_catalog(
+                db_name_catalog_broken.clone(),
+                Some(&get_token_from_error(&err)),
+            )
             .unwrap();
         let metadata = tracker.metadata();
         let expected_metadata = Job::WipePreservedCatalog {
@@ -2108,9 +2145,12 @@ mod tests {
             .create_database(DatabaseRules::new(db_name_created.clone()))
             .await
             .unwrap();
+        let err = server
+            .wipe_preserved_catalog(db_name_created.clone(), None)
+            .unwrap_err();
         assert_eq!(
             server
-                .wipe_preserved_catalog(db_name_created.clone())
+                .wipe_preserved_catalog(db_name_created.clone(), Some(&get_token_from_error(&err)))
                 .unwrap_err()
                 .to_string(),
             "database already exists"
@@ -2122,5 +2162,14 @@ mod tests {
         )
         .await
         .unwrap());
+    }
+
+    fn get_token_from_error(e: &Error) -> String {
+        match e {
+            Error::TokenError { source } => source.new_token().to_string(),
+            _ => {
+                panic!("cannot extract token from error: {}", e)
+            }
+        }
     }
 }

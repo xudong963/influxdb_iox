@@ -88,7 +88,7 @@ fn log_token(
 ) -> String {
     let token = gen.generate(scope, now);
     let token_with_markers = format!("Token(\"{}\")", token);
-    info!(%token_with_markers, "New token to {}", description);
+    info!(token = %token_with_markers, "New token to {}", description);
     token
 }
 

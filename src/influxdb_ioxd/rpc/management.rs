@@ -409,14 +409,20 @@ where
         &self,
         request: Request<WipePreservedCatalogRequest>,
     ) -> Result<Response<WipePreservedCatalogResponse>, Status> {
-        let WipePreservedCatalogRequest { db_name } = request.into_inner();
+        let WipePreservedCatalogRequest { db_name, token } = request.into_inner();
 
         // Validate that the database name is legit
         let db_name = DatabaseName::new(db_name).field("db_name")?;
 
+        let token = if token.is_empty() {
+            None
+        } else {
+            Some(token.as_ref())
+        };
+
         let tracker = self
             .server
-            .wipe_preserved_catalog(db_name)
+            .wipe_preserved_catalog(db_name, token)
             .map_err(|e| match e {
                 Error::DatabaseAlreadyExists { db_name } => AlreadyExists {
                     resource_type: "database".to_string(),
