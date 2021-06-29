@@ -796,6 +796,10 @@ impl QueryChunk for TestChunk {
 
         Ok(column_names)
     }
+
+    fn satisfies_predicate(&self, predicate: &Predicate) -> PredicateMatch {
+        todo!()
+    }
 }
 
 impl QueryChunkMeta for TestChunk {
