@@ -45,11 +45,6 @@ pub fn default_server_error_handler(error: server::Error) -> tonic::Status {
         }
         .into(),
         Error::RemoteError { source } => tonic::Status::unavailable(source.to_string()),
-        Error::TokenError {source} => PreconditionViolation {
-            category: "token".to_string(),
-            subject: "influxdata.com/iox".to_string(),
-            description: source.description().to_string(),
-        }.into(),
         error => {
             error!(?error, "Unexpected error");
             InternalError {}.into()

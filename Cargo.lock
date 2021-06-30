@@ -3813,7 +3813,6 @@ dependencies = [
  "tempfile",
  "test_helpers",
  "tikv-jemalloc-ctl",
- "token_challenge",
  "tokio",
  "tokio-util",
  "tracker",

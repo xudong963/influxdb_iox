@@ -5,20 +5,46 @@ use std::sync::Arc;
 use data_types::{database_rules::DatabaseRules, server_id::ServerId, DatabaseName};
 use generated_types::google::{
     AlreadyExists, FieldViolation, FieldViolationExt, FromFieldOpt, InternalError, NotFound,
+    PreconditionViolation,
 };
 use generated_types::influxdata::iox::management::v1::{Error as ProtobufError, *};
 use observability_deps::tracing::info;
 use query::{DatabaseStore, QueryDatabase};
 use server::{ConnectionManager, Error, Server};
+use token_challenge::{hmac::HmacTokenGenerator, log::verify_or_log_token};
 use tonic::{Request, Response, Status};
+
+use super::error::{default_db_error_handler, default_server_error_handler};
+use crate::influxdb_ioxd::serving_readiness::ServingReadiness;
 
 struct ManagementService<M: ConnectionManager> {
     server: Arc<Server<M>>,
     serving_readiness: ServingReadiness,
+    token_generator: HmacTokenGenerator,
 }
 
-use super::error::{default_db_error_handler, default_server_error_handler};
-use crate::influxdb_ioxd::serving_readiness::ServingReadiness;
+impl<M> ManagementService<M>
+where
+    M: ConnectionManager,
+{
+    /// Check token that acts as a second factor (aka fat-finger protection).
+    fn check_token(&self, scope: &str, description: &str, token: String) -> Result<(), Status> {
+        let token = if token.is_empty() {
+            None
+        } else {
+            Some(token.as_ref())
+        };
+
+        verify_or_log_token(&self.token_generator, scope, description, token).map_err(|source| {
+            PreconditionViolation {
+                category: "token".to_string(),
+                subject: "influxdata.com/iox".to_string(),
+                description: source.description().to_string(),
+            }
+            .into()
+        })
+    }
+}
 
 #[derive(Debug)]
 enum UpdateError {
@@ -414,15 +440,16 @@ where
         // Validate that the database name is legit
         let db_name = DatabaseName::new(db_name).field("db_name")?;
 
-        let token = if token.is_empty() {
-            None
-        } else {
-            Some(token.as_ref())
-        };
+        // verify token
+        self.check_token(
+            &format!("wipe_preserved_catalog@db={}", db_name),
+            &format!("wipe preserved catalog for database {}", db_name),
+            token,
+        )?;
 
         let tracker = self
             .server
-            .wipe_preserved_catalog(db_name, token)
+            .wipe_preserved_catalog(db_name)
             .map_err(|e| match e {
                 Error::DatabaseAlreadyExists { db_name } => AlreadyExists {
                     resource_type: "database".to_string(),
@@ -450,5 +477,6 @@ where
     management_service_server::ManagementServiceServer::new(ManagementService {
         server,
         serving_readiness,
+        token_generator: HmacTokenGenerator::new(60),
     })
 }
