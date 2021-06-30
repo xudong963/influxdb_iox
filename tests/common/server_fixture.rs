@@ -247,6 +247,18 @@ impl ServerFixture {
     pub async fn token(&self) -> Option<String> {
         extract_last_token_from_logs(&std::fs::read_to_string(&self.log_path().await).unwrap())
     }
+
+    /// Wait for last token.
+    pub async fn wait_token(&self) -> String {
+        let t_0 = Instant::now();
+        loop {
+            if let Some(token) = self.token().await {
+                return token;
+            }
+            assert!(t_0.elapsed() < Duration::from_secs(10));
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }
 
 #[derive(Debug)]

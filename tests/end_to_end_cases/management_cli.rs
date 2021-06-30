@@ -584,7 +584,12 @@ async fn test_close_partition_chunk_error() {
 
 #[tokio::test]
 async fn test_wipe_persisted_catalog() {
-    let server_fixture = ServerFixture::create_shared().await;
+    // need single use server so it's easier to wait for the token
+    let server_fixture = ServerFixture::create_single_use().await;
+    let mut client = server_fixture.management_client();
+    client.update_server_id(42).await.expect("set ID failed");
+    server_fixture.wait_server_initialized().await;
+
     let addr = server_fixture.grpc_base();
     let db_name = rand_name();
 
@@ -600,7 +605,7 @@ async fn test_wipe_persisted_catalog() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("Token wrong or missing"));
-    let token = server_fixture.token().await.unwrap();
+    let token = server_fixture.wait_token().await;
 
     let stdout: Operation = serde_json::from_slice(
         &Command::cargo_bin("influxdb_iox")
@@ -632,7 +637,12 @@ async fn test_wipe_persisted_catalog() {
 
 #[tokio::test]
 async fn test_wipe_persisted_catalog_error_db_exists() {
-    let server_fixture = ServerFixture::create_shared().await;
+    // need single use server so it's easier to wait for the token
+    let server_fixture = ServerFixture::create_single_use().await;
+    let mut client = server_fixture.management_client();
+    client.update_server_id(42).await.expect("set ID failed");
+    server_fixture.wait_server_initialized().await;
+
     let addr = server_fixture.grpc_base();
     let db_name = rand_name();
 
@@ -650,7 +660,7 @@ async fn test_wipe_persisted_catalog_error_db_exists() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("Token wrong or missing"));
-    let token = server_fixture.token().await.unwrap();
+    let token = server_fixture.wait_token().await;
 
     Command::cargo_bin("influxdb_iox")
         .unwrap()
