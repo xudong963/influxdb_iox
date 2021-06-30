@@ -1637,6 +1637,7 @@ dependencies = [
  "arrow-flight",
  "arrow_util",
  "assert_cmd",
+ "base64 0.13.0",
  "byteorder",
  "bytes",
  "chrono",

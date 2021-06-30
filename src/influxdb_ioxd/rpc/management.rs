@@ -9,6 +9,7 @@ use generated_types::google::{
 };
 use generated_types::influxdata::iox::management::v1::{Error as ProtobufError, *};
 use observability_deps::tracing::info;
+use prost::Message;
 use query::{DatabaseStore, QueryDatabase};
 use server::{ConnectionManager, Error, Server};
 use token_challenge::{hmac::HmacTokenGenerator, log::verify_or_log_token};
@@ -28,14 +29,43 @@ where
     M: ConnectionManager,
 {
     /// Check token that acts as a second factor (aka fat-finger protection).
-    fn check_token(&self, scope: &str, description: &str, token: String) -> Result<(), Status> {
+    fn check_token<R, FToken, FDescription>(
+        &self,
+        request_message: &R,
+        f_token: FToken,
+        f_description: FDescription,
+    ) -> Result<(), Status>
+    where
+        R: Clone + Message,
+        FToken: Fn(R) -> (String, R),
+        FDescription: Fn(&R) -> String,
+    {
+        // extract token and clear it from the message (so it doesn't end up in the scope)
+        let (token, request_message) = f_token(request_message.clone());
+
+        // convert token to optional
         let token = if token.is_empty() {
             None
         } else {
             Some(token.as_ref())
         };
 
-        verify_or_log_token(&self.token_generator, scope, description, token).map_err(|source| {
+        // convert message to scope
+        let mut buf = Vec::new();
+        if let Err(_e) = request_message.encode(&mut buf) {
+            return Err(PreconditionViolation {
+                category: "token".to_string(),
+                subject: "influxdata.com/iox".to_string(),
+                description: "cannot encode scope".to_string(),
+            }
+            .into());
+        }
+        let scope = base64::encode(buf);
+
+        // get description from message
+        let description = f_description(&request_message);
+
+        verify_or_log_token(&self.token_generator, &scope, &description, token).map_err(|source| {
             PreconditionViolation {
                 category: "token".to_string(),
                 subject: "influxdata.com/iox".to_string(),
@@ -44,6 +74,20 @@ where
             .into()
         })
     }
+}
+
+macro_rules! check_token {
+    ($self:expr, $request:expr, $description:expr) => {
+        $self.check_token(
+            $request.get_ref(),
+            |mut request_message| {
+                let mut token = "".to_string();
+                std::mem::swap(&mut token, &mut request_message.token);
+                (token, request_message)
+            },
+            $description,
+        )?;
+    };
 }
 
 #[derive(Debug)]
@@ -435,17 +479,16 @@ where
         &self,
         request: Request<WipePreservedCatalogRequest>,
     ) -> Result<Response<WipePreservedCatalogResponse>, Status> {
-        let WipePreservedCatalogRequest { db_name, token } = request.into_inner();
+        // verify token
+        check_token!(self, request, |request_message| format!(
+            "wipe preserved catalog for database {}",
+            request_message.db_name
+        ));
+
+        let WipePreservedCatalogRequest { db_name, .. } = request.into_inner();
 
         // Validate that the database name is legit
         let db_name = DatabaseName::new(db_name).field("db_name")?;
-
-        // verify token
-        self.check_token(
-            &format!("wipe_preserved_catalog@db={}", db_name),
-            &format!("wipe preserved catalog for database {}", db_name),
-            token,
-        )?;
 
         let tracker = self
             .server
