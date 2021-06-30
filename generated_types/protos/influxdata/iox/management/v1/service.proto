@@ -279,7 +279,7 @@ message WipePreservedCatalogRequest {
   string db_name = 1;
 
   // token for sanity checking
-  string token = 2;
+  string fatfinger_token = 2;
 }
 
 message WipePreservedCatalogResponse {

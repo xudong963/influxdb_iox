@@ -677,7 +677,7 @@ impl Client {
     pub async fn wipe_persisted_catalog(
         &mut self,
         db_name: impl Into<String> + Send,
-        token: Option<String>,
+        fatfinger_token: Option<String>,
     ) -> Result<Operation, WipePersistedCatalogError> {
         let db_name = db_name.into();
 
@@ -685,7 +685,7 @@ impl Client {
             .inner
             .wipe_preserved_catalog(WipePreservedCatalogRequest {
                 db_name,
-                token: token.unwrap_or_else(String::new),
+                fatfinger_token: fatfinger_token.unwrap_or_else(String::new),
             })
             .await
             .map_err(|status| match status.code() {

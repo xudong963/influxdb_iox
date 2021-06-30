@@ -29,7 +29,7 @@ where
     M: ConnectionManager,
 {
     /// Check token that acts as a second factor (aka fat-finger protection).
-    fn check_token<R, FToken, FDescription>(
+    fn check_fatfinger_token<R, FToken, FDescription>(
         &self,
         request_message: &R,
         f_token: FToken,
@@ -76,13 +76,13 @@ where
     }
 }
 
-macro_rules! check_token {
+macro_rules! check_fatfinger_token {
     ($self:expr, $request:expr, $description:expr) => {
-        $self.check_token(
+        $self.check_fatfinger_token(
             $request.get_ref(),
             |mut request_message| {
                 let mut token = "".to_string();
-                std::mem::swap(&mut token, &mut request_message.token);
+                std::mem::swap(&mut token, &mut request_message.fatfinger_token);
                 (token, request_message)
             },
             $description,
@@ -480,7 +480,7 @@ where
         request: Request<WipePreservedCatalogRequest>,
     ) -> Result<Response<WipePreservedCatalogResponse>, Status> {
         // verify token
-        check_token!(self, request, |request_message| format!(
+        check_fatfinger_token!(self, request, |request_message| format!(
             "wipe preserved catalog for database {}",
             request_message.db_name
         ));
