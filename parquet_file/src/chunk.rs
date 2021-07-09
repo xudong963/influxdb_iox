@@ -1,7 +1,11 @@
 use snafu::{ResultExt, Snafu};
 use std::{collections::BTreeSet, sync::Arc};
 
-use crate::{metadata::IoxParquetMetaData, storage::Storage};
+use crate::{
+    metadata::{IoxMetadata, IoxParquetMetaData},
+    storage::Storage,
+};
+use chrono::{DateTime, Utc};
 use data_types::{
     partition_metadata::{Statistics, TableSummary},
     timestamp::TimestampRange,
@@ -109,6 +113,9 @@ pub struct ParquetChunk {
     parquet_metadata: Arc<IoxParquetMetaData>,
 
     metrics: ChunkMetrics,
+
+    time_of_first_write: DateTime<Utc>,
+    time_of_last_write: DateTime<Utc>,
 }
 
 impl ParquetChunk {
@@ -125,17 +132,26 @@ impl ParquetChunk {
             .context(IoxMetadataReadFailed {
                 path: &file_location,
             })?;
+
+        let IoxMetadata {
+            table_name,
+            time_of_first_write,
+            time_of_last_write,
+            partition_key,
+            ..
+        } = iox_md;
+
         let schema = parquet_metadata.read_schema().context(SchemaReadFailed {
             path: &file_location,
         })?;
         let table_summary = parquet_metadata
-            .read_statistics(&schema, &iox_md.table_name)
+            .read_statistics(&schema, &table_name)
             .context(StatisticsReadFailed {
                 path: &file_location,
             })?;
 
         Ok(Self::new_from_parts(
-            iox_md.partition_key,
+            partition_key,
             Arc::new(table_summary),
             schema,
             file_location,
@@ -143,6 +159,8 @@ impl ParquetChunk {
             file_size_bytes,
             parquet_metadata,
             metrics,
+            time_of_first_write,
+            time_of_last_write,
         ))
     }
 
@@ -157,6 +175,8 @@ impl ParquetChunk {
         file_size_bytes: usize,
         parquet_metadata: Arc<IoxParquetMetaData>,
         metrics: ChunkMetrics,
+        time_of_first_write: DateTime<Utc>,
+        time_of_last_write: DateTime<Utc>,
     ) -> Self {
         let timestamp_range = extract_range(&table_summary);
 
@@ -170,6 +190,8 @@ impl ParquetChunk {
             file_size_bytes,
             parquet_metadata,
             metrics,
+            time_of_first_write,
+            time_of_last_write,
         }
     }
 
@@ -267,6 +289,13 @@ impl ParquetChunk {
     /// Parquet metadata from the underlying file.
     pub fn parquet_metadata(&self) -> Arc<IoxParquetMetaData> {
         Arc::clone(&self.parquet_metadata)
+    }
+
+    pub fn time_of_first_write(&self) -> DateTime<Utc> {
+        self.time_of_first_write
+    }
+    pub fn time_of_last_write(&self) -> DateTime<Utc> {
+        self.time_of_last_write
     }
 }
 
