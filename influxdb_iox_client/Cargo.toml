@@ -13,6 +13,7 @@ format = ["arrow"]
 arrow = { version = "4.0", optional = true }
 arrow-flight = { version = "4.0", optional = true}
 generated_types = { path = "../generated_types" }
+observability_deps = { path = "../observability_deps" }
 
 # Crates.io dependencies, in alphabetical order
 futures-util = { version = "0.3.1", optional = true }

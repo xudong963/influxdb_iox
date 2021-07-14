@@ -5,6 +5,7 @@ use self::generated_types::{management_service_client::ManagementServiceClient, 
 use crate::connection::Connection;
 use ::generated_types::google::longrunning::Operation;
 
+use observability_deps::tracing::info;
 use std::convert::TryInto;
 use std::num::NonZeroU32;
 
@@ -417,7 +418,10 @@ impl Client {
                 tonic::Code::FailedPrecondition => CreateDatabaseError::NoServerId,
                 tonic::Code::InvalidArgument => CreateDatabaseError::InvalidArgument(status),
                 tonic::Code::Unavailable => CreateDatabaseError::Unavailable(status),
-                _ => CreateDatabaseError::ServerError(status),
+                x => {
+                    info!(code=?x, "tonic code");
+                    CreateDatabaseError::ServerError(status)
+                }
             })?;
 
         Ok(())

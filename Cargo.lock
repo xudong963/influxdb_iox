@@ -1706,6 +1706,7 @@ dependencies = [
  "generated_types",
  "http",
  "hyper",
+ "observability_deps",
  "prost",
  "rand 0.8.4",
  "serde",
