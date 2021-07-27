@@ -26,6 +26,7 @@ use observability_deps::tracing::{self, error, info, warn, Instrument};
 use snafu::{ensure, OptionExt};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tracker::{TaskRegistration, TaskTracker, TrackedFutureExt};
 
 pub(crate) const DB_RULES_FILE_NAME: &str = "rules.pb";
 
@@ -270,6 +271,21 @@ impl Config {
         state.reservations.remove(name);
     }
 
+    /// Returns the names of any databases that are unhealthy (have no running background task)
+    pub(crate) fn unhealthy_databases(&self) -> Vec<DatabaseName<'static>> {
+        let state = self.state.read().expect("mutex poisoned");
+        state
+            .databases
+            .iter()
+            .filter_map(|(db_name, state)| match state.as_ref() {
+                DatabaseState::Initialized { tracker, .. } if tracker.is_complete() => {
+                    Some(db_name.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Cancels and drains all background worker tasks
     pub(crate) async fn drain(&self) {
         info!("shutting down database background workers");
@@ -403,6 +419,7 @@ enum DatabaseState {
     Initialized {
         db: Arc<Db>,
         handle: Option<JoinHandle<()>>,
+        tracker: TaskTracker<()>,
         shutdown: CancellationToken,
     },
 }
@@ -645,17 +662,29 @@ impl<'a> DatabaseHandle<'a> {
                 let db_captured = Arc::clone(&db);
                 let rules = db.rules();
 
+                // tokio::JoinHandle doesn't have a way to synchronously check for completion
+                // so we use a task tracker instead
+                let registration = TaskRegistration::new();
+                let reg_captured = registration.clone();
                 let handle = Some(tokio::spawn(async move {
-                    db_captured
-                        .background_worker(shutdown_captured)
-                        .instrument(tracing::info_span!("db_worker", database=%rules.name))
-                        .await
+                    async move {
+                        db_captured
+                            .background_worker(shutdown_captured)
+                            .instrument(tracing::info_span!("db_worker", database=%rules.name))
+                            .await;
+                        Ok::<_, std::convert::Infallible>(())
+                    }
+                    .track(reg_captured.clone())
+                    .await
+                    .expect("background worker cancelled")
+                    .expect("unreachable")
                 }));
 
                 self.state = Some(Arc::new(DatabaseState::Initialized {
                     db: Arc::clone(&db),
                     handle,
                     shutdown,
+                    tracker: registration.into_tracker(()),
                 }));
 
                 Ok(())

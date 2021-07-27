@@ -1151,6 +1151,19 @@ where
             self.maybe_initialize_server().await;
             self.jobs.inner.lock().reclaim();
 
+            if let Ok(config) = self.config() {
+                let unhealthy = config.unhealthy_databases();
+                if !unhealthy.is_empty() {
+                    for db_name in unhealthy {
+                        error!(%db_name, "database unhealthy");
+                    }
+                }
+                // There currently isn't a way to recover from this
+                error!("server shutting down due to unhealthy databases");
+                shutdown.cancel();
+                break;
+            }
+
             tokio::select! {
                 _ = interval.tick() => {},
                 _ = shutdown.cancelled() => break
