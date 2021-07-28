@@ -79,7 +79,7 @@ use parking_lot::{Mutex, RwLockUpgradableReadGuard};
 use rand::seq::SliceRandom;
 use snafu::{OptionExt, ResultExt, Snafu};
 
-use config::{object_store_path_for_database_config, Config, GRpcConnectionString};
+use config::{object_store_path_for_database_config, Config};
 use data_types::database_rules::ShardConfig;
 use data_types::{
     database_rules::{
@@ -100,17 +100,19 @@ use metrics::{KeyValue, MetricObserverBuilder, MetricRegistry};
 use object_store::{ObjectStore, ObjectStoreApi};
 use observability_deps::tracing::{error, info, warn};
 use query::{exec::Executor, DatabaseStore};
+use resolver::Resolver;
 use tracker::{TaskId, TaskRegistration, TaskRegistryWithHistory, TaskTracker, TrackedFutureExt};
 use write_buffer::config::WriteBufferConfig;
 
-pub use config::RemoteTemplate;
 pub use connection::{ConnectionManager, ConnectionManagerImpl, RemoteServer};
 pub use db::Db;
+pub use resolver::{GrpcConnectionString, RemoteTemplate};
 
 mod config;
 mod connection;
 pub mod db;
 mod init;
+mod resolver;
 
 /// Utility modules used by benchmarks and tests
 pub mod utils;
@@ -212,7 +214,7 @@ pub enum Error {
 
     #[snafu(display("all remotes failed connecting: {:?}", errors))]
     NoRemoteReachable {
-        errors: HashMap<GRpcConnectionString, connection::ConnectionManagerError>,
+        errors: HashMap<GrpcConnectionString, connection::ConnectionManagerError>,
     },
 
     #[snafu(display("remote error: {}", source))]
@@ -431,6 +433,9 @@ pub struct Server<M: ConnectionManager> {
     /// and populates the endpoint with this data.
     pub registry: Arc<metrics::MetricRegistry>,
 
+    /// Resolver for mapping ServerId to gRPC connection strings
+    resolver: RwLock<Resolver>,
+
     /// The state machine for server startup
     stage: Arc<RwLock<ServerStage>>,
 }
@@ -450,10 +455,7 @@ pub struct Server<M: ConnectionManager> {
 #[derive(Debug)]
 enum ServerStage {
     /// Server has started but doesn't have a server id yet
-    Startup {
-        remote_template: Option<RemoteTemplate>,
-        wipe_catalog_on_error: bool,
-    },
+    Startup { wipe_catalog_on_error: bool },
 
     /// Server can be initialized
     InitReady {
@@ -515,8 +517,8 @@ where
             jobs,
             metrics: Arc::new(ServerMetrics::new(Arc::clone(&metric_registry))),
             registry: Arc::clone(&metric_registry),
+            resolver: RwLock::new(Resolver::new(remote_template)),
             stage: Arc::new(RwLock::new(ServerStage::Startup {
-                remote_template,
                 wipe_catalog_on_error,
             })),
         }
@@ -530,11 +532,8 @@ where
         let mut stage = self.stage.write();
         match &mut *stage {
             ServerStage::Startup {
-                remote_template,
                 wipe_catalog_on_error,
             } => {
-                let remote_template = remote_template.take();
-
                 *stage = ServerStage::InitReady {
                     wipe_catalog_on_error: *wipe_catalog_on_error,
                     config: Arc::new(Config::new(
@@ -543,7 +542,6 @@ where
                         Arc::clone(&self.exec),
                         id,
                         Arc::clone(&self.registry),
-                        remote_template,
                     )),
                     last_error: None,
                 };
@@ -899,12 +897,16 @@ where
         entry: Entry,
     ) -> Result<()> {
         // Return an error if this server is not yet ready
-        let config = self.config()?;
+        self.require_initialized()?;
 
-        let addrs: Vec<_> = node_group
-            .iter()
-            .filter_map(|&node| config.resolve_remote(node))
-            .collect();
+        let addrs: Vec<_> = {
+            let resolver = self.resolver.read();
+            node_group
+                .iter()
+                .filter_map(|&node| resolver.resolve_remote(node))
+                .collect()
+        };
+
         if addrs.is_empty() {
             return NoRemoteConfigured { node_group }.fail();
         }
@@ -1010,23 +1012,16 @@ where
         Ok(rules)
     }
 
-    pub fn remotes_sorted(&self) -> Result<Vec<(ServerId, String)>> {
-        // TODO: Should these be on ConnectionManager and not Config
-        let config = self.config()?;
-        Ok(config.remotes_sorted())
+    pub fn remotes_sorted(&self) -> Vec<(ServerId, String)> {
+        self.resolver.read().remotes_sorted()
     }
 
-    pub fn update_remote(&self, id: ServerId, addr: GRpcConnectionString) -> Result<()> {
-        // TODO: Should these be on ConnectionManager and not Config
-        let config = self.config()?;
-        config.update_remote(id, addr);
-        Ok(())
+    pub fn update_remote(&self, id: ServerId, addr: GrpcConnectionString) {
+        self.resolver.write().update_remote(id, addr)
     }
 
-    pub fn delete_remote(&self, id: ServerId) -> Result<Option<GRpcConnectionString>> {
-        // TODO: Should these be on ConnectionManager and not Config
-        let config = self.config()?;
-        Ok(config.delete_remote(id))
+    pub fn delete_remote(&self, id: ServerId) -> Option<GrpcConnectionString> {
+        self.resolver.write().delete_remote(id)
     }
 
     pub fn spawn_dummy_job(&self, nanos: Vec<u64>) -> TaskTracker<Job> {
@@ -1678,9 +1673,7 @@ mod tests {
         );
 
         // one remote is configured but it's down and we'll get connection error
-        server
-            .update_remote(bad_remote_id, BAD_REMOTE_ADDR.into())
-            .unwrap();
+        server.update_remote(bad_remote_id, BAD_REMOTE_ADDR.into());
         let err = server
             .write_lines(&db_name, &lines, ARBITRARY_DEFAULT_TIME)
             .await
@@ -1697,12 +1690,8 @@ mod tests {
 
         // We configure the address for the other remote, this time connection will succeed
         // despite the bad remote failing to connect.
-        server
-            .update_remote(good_remote_id_1, GOOD_REMOTE_ADDR_1.into())
-            .unwrap();
-        server
-            .update_remote(good_remote_id_2, GOOD_REMOTE_ADDR_2.into())
-            .unwrap();
+        server.update_remote(good_remote_id_1, GOOD_REMOTE_ADDR_1.into());
+        server.update_remote(good_remote_id_2, GOOD_REMOTE_ADDR_2.into());
 
         // Remotes are tried in random order, so we need to repeat the test a few times to have a reasonable
         // probability both the remotes will get hit.

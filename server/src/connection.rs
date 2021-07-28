@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cache_loader_async::cache_api::LoadingCache;
-use snafu::{Snafu, ResultExt};
+use snafu::{ResultExt, Snafu};
 
 use entry::Entry;
 use influxdb_iox_client::{connection::Builder, write};
