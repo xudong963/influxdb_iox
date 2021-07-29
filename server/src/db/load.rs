@@ -110,7 +110,7 @@ pub async fn load_or_create_preserved_catalog(
     }
 }
 
-/// Create new empty in-mem and perserved catalog.
+/// Create new empty in-mem and preserved catalog.
 ///
 /// This will fail if a preserved catalog already exists.
 pub async fn create_preserved_catalog(
