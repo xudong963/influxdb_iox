@@ -90,11 +90,12 @@ use entry::{lines_to_sharded_entries, pb_to_entry, Entry, ShardedEntry};
 use generated_types::database_rules::encode_database_rules;
 use generated_types::influxdata::transfer::column::v1 as pb;
 use influxdb_line_protocol::ParsedLine;
+use internal_types::freezable::Freezable;
 use lifecycle::LockableChunk;
 use metrics::{KeyValue, MetricObserverBuilder, MetricRegistry};
 use object_store::{ObjectStore, ObjectStoreApi};
 use observability_deps::tracing::{error, info, warn};
-use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
+use parking_lot::{Mutex, RwLock};
 use query::{exec::Executor, DatabaseStore};
 use rand::seq::SliceRandom;
 use resolver::Resolver;
@@ -435,7 +436,7 @@ pub struct Server<M: ConnectionManager> {
     resolver: RwLock<Resolver>,
 
     /// The state machine for server startup
-    stage: Arc<RwLock<ServerStage>>,
+    stage: Arc<RwLock<Freezable<ServerStage>>>,
 }
 
 /// The stage of the server in the startup process
@@ -457,13 +458,6 @@ enum ServerStage {
 
     /// Server can be initialized
     InitReady {
-        wipe_catalog_on_error: bool,
-        config: Arc<Config>,
-        last_error: Option<Arc<init::Error>>,
-    },
-
-    /// Server has a server id, has started loading
-    Initializing {
         wipe_catalog_on_error: bool,
         config: Arc<Config>,
         last_error: Option<Arc<init::Error>>,
@@ -516,9 +510,9 @@ where
             metrics: Arc::new(ServerMetrics::new(Arc::clone(&metric_registry))),
             registry: Arc::clone(&metric_registry),
             resolver: RwLock::new(Resolver::new(remote_template)),
-            stage: Arc::new(RwLock::new(ServerStage::Startup {
+            stage: Arc::new(RwLock::new(Freezable::new(ServerStage::Startup {
                 wipe_catalog_on_error,
-            })),
+            }))),
         }
     }
 
@@ -528,7 +522,8 @@ where
     /// A valid server ID Must be non-zero.
     pub fn set_id(&self, id: ServerId) -> Result<()> {
         let mut stage = self.stage.write();
-        match &mut *stage {
+        let stage = stage.get_mut().ok_or(Error::IdAlreadySet)?;
+        match stage {
             ServerStage::Startup {
                 wipe_catalog_on_error,
             } => {
@@ -561,18 +556,16 @@ where
 
     /// Check if server is loaded. Databases are loaded and server is ready to read/write.
     pub fn initialized(&self) -> bool {
-        matches!(&*self.stage.read(), ServerStage::Initialized { .. })
+        matches!(&**self.stage.read(), ServerStage::Initialized { .. })
     }
 
     /// Require that server is loaded. Databases are loaded and server is ready to read/write.
     fn require_initialized(&self) -> Result<Arc<Config>> {
-        match &*self.stage.read() {
+        match &**self.stage.read() {
             ServerStage::Startup { .. } => Err(Error::IdNotSet),
-            ServerStage::InitReady { config, .. } | ServerStage::Initializing { config, .. } => {
-                Err(Error::ServerNotInitialized {
-                    server_id: config.server_id(),
-                })
-            }
+            ServerStage::InitReady { config, .. } => Err(Error::ServerNotInitialized {
+                server_id: config.server_id(),
+            }),
             ServerStage::Initialized { config, .. } => Ok(Arc::clone(&config)),
         }
     }
@@ -580,11 +573,11 @@ where
     /// Returns the config for this server if server id has been set
     fn config(&self) -> Result<Arc<Config>> {
         let stage = self.stage.read();
-        match &*stage {
+        match &**stage {
             ServerStage::Startup { .. } => Err(Error::IdNotSet),
-            ServerStage::InitReady { config, .. }
-            | ServerStage::Initializing { config, .. }
-            | ServerStage::Initialized { config, .. } => Ok(Arc::clone(&config)),
+            ServerStage::InitReady { config, .. } | ServerStage::Initialized { config, .. } => {
+                Ok(Arc::clone(&config))
+            }
         }
     }
 
@@ -596,9 +589,8 @@ where
     /// Error occurred during generic server init (e.g. listing store content).
     pub fn error_generic(&self) -> Option<Arc<crate::init::Error>> {
         let stage = self.stage.read();
-        match &*stage {
+        match &**stage {
             ServerStage::InitReady { last_error, .. } => last_error.clone(),
-            ServerStage::Initializing { last_error, .. } => last_error.clone(),
             _ => None,
         }
     }
@@ -606,7 +598,7 @@ where
     /// List all databases with errors in sorted order.
     pub fn databases_with_errors(&self) -> Vec<String> {
         let stage = self.stage.read();
-        match &*stage {
+        match &**stage {
             ServerStage::Initialized {
                 database_errors, ..
             } => database_errors.keys().cloned().collect(),
@@ -617,7 +609,7 @@ where
     /// Error that occurred during initialization of a specific database.
     pub fn error_database(&self, db_name: &str) -> Option<Arc<crate::init::Error>> {
         let stage = self.stage.read();
-        match &*stage {
+        match &**stage {
             ServerStage::Initialized {
                 database_errors, ..
             } => database_errors.get(db_name).cloned(),
@@ -702,28 +694,27 @@ where
     ///
     /// It will be a no-op if the configs are already loaded and the server is ready.
     pub async fn maybe_initialize_server(&self) {
+        if self.initialized() {
+            return;
+        }
+
         // Explicit scope to help async generator
-        let (wipe_catalog_on_error, config) = {
-            let state = self.stage.upgradable_read();
-            match &*state {
+        let (wipe_catalog_on_error, config, handle) = {
+            let mut state = self.stage.write();
+            let handle = match state.try_freeze() {
+                Some(handle) => handle,
+                None => return, // Transaction already in-progress
+            };
+
+            match &**state {
                 ServerStage::InitReady {
                     wipe_catalog_on_error,
                     config,
-                    last_error,
+                    ..
                 } => {
                     let config = Arc::clone(config);
-                    let last_error = last_error.clone();
                     let wipe_catalog_on_error = *wipe_catalog_on_error;
-
-                    // Mark the server as initializing and drop lock
-
-                    let mut state = RwLockUpgradableReadGuard::upgrade(state);
-                    *state = ServerStage::Initializing {
-                        config: Arc::clone(&config),
-                        wipe_catalog_on_error,
-                        last_error,
-                    };
-                    (wipe_catalog_on_error, config)
+                    (wipe_catalog_on_error, config, handle)
                 }
                 _ => return,
             }
@@ -753,7 +744,7 @@ where
             }
         };
 
-        *self.stage.write() = new_stage;
+        *self.stage.write().unfreeze(handle) = new_stage;
     }
 
     pub async fn write_pb(&self, database_batch: pb::DatabaseBatch) -> Result<()> {
@@ -1091,7 +1082,7 @@ where
         db_name: &DatabaseName<'static>,
     ) -> Result<TaskTracker<Job>> {
         // Can only wipe catalog of database that failed to initialize
-        let config = match &*self.stage.read() {
+        let config = match &**self.stage.read() {
             ServerStage::Initialized {
                 config,
                 database_errors,
@@ -1109,7 +1100,7 @@ where
                 Arc::clone(config)
             }
             ServerStage::Startup { .. } => return Err(Error::IdNotSet),
-            ServerStage::Initializing { config, .. } | ServerStage::InitReady { config, .. } => {
+            ServerStage::InitReady { config, .. } => {
                 return Err(Error::ServerNotInitialized {
                     server_id: config.server_id(),
                 })
@@ -1120,16 +1111,15 @@ where
             db_name: Arc::from(db_name.as_str()),
         });
 
-        let state = Arc::clone(&self.stage);
+        let stage = Arc::clone(&self.stage);
         let db_name = db_name.clone();
-
         let task = async move {
             let result = init::wipe_preserved_catalog_and_maybe_recover(config, &db_name).await;
 
-            match &mut *state.write() {
-                ServerStage::Initialized {
+            match stage.write().get_mut() {
+                Some(ServerStage::Initialized {
                     database_errors, ..
-                } => match result {
+                }) => match result {
                     Ok(_) => {
                         info!(%db_name, "wiped preserved catalog of registered database and recovered");
                         database_errors.remove(db_name.as_str());
