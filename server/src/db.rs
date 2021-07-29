@@ -367,6 +367,13 @@ pub struct Db {
     /// The cleanup job needs exclusive access and hence will acquire a write-guard. Creating parquet files and creating
     /// catalog transaction only needs shared access and hence will acquire a read-guard.
     cleanup_lock: Arc<tokio::sync::RwLock<()>>,
+
+    /// Semaphore with a single permit for the background worker.
+    ///
+    /// This ensures that:
+    /// 1. only a single background worker is running at the same time
+    /// 2. no background worker is running during replay, since we must not persist during replay
+    background_worker_semaphore: tokio::sync::Semaphore,
 }
 
 /// All the information needed to commit a database
@@ -425,6 +432,8 @@ impl Db {
             ingest_metrics,
             write_buffer: database_to_commit.write_buffer,
             cleanup_lock: Default::default(),
+            // semaphore for a single background worker
+            background_worker_semaphore: tokio::sync::Semaphore::new(1),
         }
     }
 
@@ -737,16 +746,30 @@ impl Db {
     }
 
     /// Perform sequencer-driven replay for this DB.
+    ///
+    /// # Panics
+    /// Panics when another replay or background worker is running at the same time.
     pub async fn perform_replay(&self, replay_plan: &ReplayPlan) -> Result<()> {
         use crate::db::replay::perform_replay;
+        let _permit = self
+            .background_worker_semaphore
+            .try_acquire()
+            .expect("other replay or background worker running");
         perform_replay(self, replay_plan).await.context(ReplayError)
     }
 
-    /// Background worker function
+    /// Background worker function.
+    ///
+    /// # Panics
+    /// Panics when another background worker or replay is running at the same time.
     pub async fn background_worker(
         self: &Arc<Self>,
         shutdown: tokio_util::sync::CancellationToken,
     ) {
+        let _permit = self
+            .background_worker_semaphore
+            .try_acquire()
+            .expect("other background worker or replay running");
         info!("started background worker");
 
         tokio::join!(
@@ -1364,7 +1387,7 @@ mod tests {
         metadata::IoxParquetMetaData,
         test_utils::{load_parquet_from_store_for_path, read_data_from_parquet_data},
     };
-    use persistence_windows::min_max_sequence::MinMaxSequence;
+    use persistence_windows::{checkpoint::ReplayPlanner, min_max_sequence::MinMaxSequence};
     use query::{frontend::sql::SqlQueryPlanner, QueryChunk, QueryDatabase};
     use std::{
         collections::{BTreeMap, HashSet},
@@ -4055,5 +4078,67 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn background_worker_concurrent_panic() {
+        let db = make_db().await.db;
+
+        // start background task loop
+        let shutdown_1: CancellationToken = Default::default();
+        let shutdown_1_captured = shutdown_1.clone();
+        let db_captured = Arc::clone(&db);
+        let join_handle_1 =
+            tokio::spawn(async move { db_captured.background_worker(shutdown_1_captured).await });
+
+        // start second background task loop
+        let shutdown_2: CancellationToken = Default::default();
+        let db_captured = Arc::clone(&db);
+        let join_handle_2 =
+            tokio::spawn(async move { db_captured.background_worker(shutdown_2).await });
+
+        // second worker should fail
+        let res = join_handle_2.await;
+        let panic_data = res.unwrap_err().into_panic();
+        let panic_string = panic_data.downcast::<String>().unwrap();
+        assert_eq!(
+            panic_string.as_ref(),
+            "other background worker or replay running: NoPermits"
+        );
+
+        // stop background task loop
+        shutdown_1.cancel();
+        join_handle_1.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn replay_while_background_worker_active_panics() {
+        let db = make_db().await.db;
+
+        // start background task loop
+        let shutdown: CancellationToken = Default::default();
+        let shutdown_captured = shutdown.clone();
+        let db_captured = Arc::clone(&db);
+        let join_handle_1 =
+            tokio::spawn(async move { db_captured.background_worker(shutdown_captured).await });
+
+        // perform replay
+        let db_captured = Arc::clone(&db);
+        let replay_plan = ReplayPlanner::new().build().unwrap();
+        let join_handle_2 =
+            tokio::spawn(async move { db_captured.perform_replay(&replay_plan).await });
+
+        // second worker should fail
+        let res = join_handle_2.await;
+        let panic_data = res.unwrap_err().into_panic();
+        let panic_string = panic_data.downcast::<String>().unwrap();
+        assert_eq!(
+            panic_string.as_ref(),
+            "other replay or background worker running: NoPermits"
+        );
+
+        // stop background task loop
+        shutdown.cancel();
+        join_handle_1.await.unwrap();
     }
 }
