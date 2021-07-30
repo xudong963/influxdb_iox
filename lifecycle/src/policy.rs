@@ -465,6 +465,7 @@ where
         &mut self,
         now: DateTime<Utc>,
         now_instant: Instant,
+        suppress_persistence: bool,
     ) -> BoxFuture<'_, ()> {
         // Any time-consuming work should be spawned as tokio tasks and not
         // run directly within this loop
@@ -485,7 +486,7 @@ where
             // if the criteria for persistence have been satisfied,
             // but persistence cannot proceed because of in-progress
             // compactions
-            let stall_compaction_persisting = if rules.persist {
+            let stall_compaction_persisting = if rules.persist && !suppress_persistence {
                 let persisting =
                     self.maybe_persist_chunks(&db_name, partition, &rules, now_instant);
                 if persisting {
@@ -1166,7 +1167,7 @@ mod tests {
 
         let db = TestDb::new(rules, chunks);
         let mut lifecycle = LifecyclePolicy::new(&db);
-        lifecycle.check_for_work(from_secs(40), Instant::now());
+        lifecycle.check_for_work(from_secs(40), Instant::now(), false);
         assert_eq!(*db.events.read(), vec![]);
     }
 
@@ -1186,21 +1187,21 @@ mod tests {
         let mut lifecycle = LifecyclePolicy::new(&db);
         let partition = Arc::clone(&db.partitions.read()[0]);
 
-        lifecycle.check_for_work(from_secs(9), Instant::now());
+        lifecycle.check_for_work(from_secs(9), Instant::now(), false);
 
         assert_eq!(*db.events.read(), vec![]);
 
-        lifecycle.check_for_work(from_secs(11), Instant::now());
+        lifecycle.check_for_work(from_secs(11), Instant::now(), false);
         let chunks = partition.read().chunks.keys().cloned().collect::<Vec<_>>();
         // expect chunk 2 to have been compacted into a new chunk 3
         assert_eq!(*db.events.read(), vec![MoverEvents::Compact(vec![2])]);
         assert_eq!(chunks, vec![0, 1, 3]);
 
-        lifecycle.check_for_work(from_secs(12), Instant::now());
+        lifecycle.check_for_work(from_secs(12), Instant::now(), false);
         assert_eq!(*db.events.read(), vec![MoverEvents::Compact(vec![2])]);
 
         // Should compact everything possible
-        lifecycle.check_for_work(from_secs(20), Instant::now());
+        lifecycle.check_for_work(from_secs(20), Instant::now(), false);
         assert_eq!(
             *db.events.read(),
             vec![
@@ -1229,12 +1230,12 @@ mod tests {
         // of check_for_work had started a background move task
         lifecycle.trackers.push(tracker);
 
-        let future = lifecycle.check_for_work(from_secs(0), Instant::now());
+        let future = lifecycle.check_for_work(from_secs(0), Instant::now(), false);
         tokio::time::timeout(Duration::from_millis(1), future)
             .await
             .expect_err("expected timeout");
 
-        let future = lifecycle.check_for_work(from_secs(0), Instant::now());
+        let future = lifecycle.check_for_work(from_secs(0), Instant::now(), false);
         std::mem::drop(registration);
         tokio::time::timeout(Duration::from_millis(1), future)
             .await
@@ -1259,7 +1260,7 @@ mod tests {
         let db = TestDb::new(rules.clone(), chunks);
         let mut lifecycle = LifecyclePolicy::new(&db);
 
-        lifecycle.check_for_work(from_secs(10), Instant::now());
+        lifecycle.check_for_work(from_secs(10), Instant::now(), false);
         assert_eq!(*db.events.read(), vec![]);
 
         let instant = Instant::now();
@@ -1293,7 +1294,7 @@ mod tests {
         let mut lifecycle = LifecyclePolicy::new(&db);
 
         // Should unload chunk 5 first as access time is smaller
-        lifecycle.check_for_work(from_secs(10), Instant::now());
+        lifecycle.check_for_work(from_secs(10), Instant::now(), false);
         assert_eq!(
             *db.events.read(),
             vec![
@@ -1322,7 +1323,7 @@ mod tests {
         let db = TestDb::new(rules.clone(), chunks);
         let mut lifecycle = LifecyclePolicy::new(&db);
 
-        lifecycle.check_for_work(from_secs(10), Instant::now());
+        lifecycle.check_for_work(from_secs(10), Instant::now(), false);
         assert_eq!(*db.events.read(), vec![]);
 
         let chunks = vec![
@@ -1341,7 +1342,7 @@ mod tests {
         let db = TestDb::new(rules, chunks);
         let mut lifecycle = LifecyclePolicy::new(&db);
 
-        lifecycle.check_for_work(from_secs(10), Instant::now());
+        lifecycle.check_for_work(from_secs(10), Instant::now(), false);
         assert_eq!(*db.events.read(), vec![MoverEvents::Unload(4)]);
     }
 
@@ -1358,7 +1359,7 @@ mod tests {
         let db = TestDb::new(rules, chunks);
         let mut lifecycle = LifecyclePolicy::new(&db);
 
-        lifecycle.check_for_work(from_secs(10), Instant::now());
+        lifecycle.check_for_work(from_secs(10), Instant::now(), false);
         assert_eq!(*db.events.read(), vec![]);
     }
 
@@ -1431,7 +1432,7 @@ mod tests {
         let db = TestDb::from_partitions(rules, partitions);
         let mut lifecycle = LifecyclePolicy::new(&db);
 
-        lifecycle.check_for_work(now, Instant::now());
+        lifecycle.check_for_work(now, Instant::now(), false);
         assert_eq!(
             *db.events.read(),
             vec![
@@ -1444,7 +1445,7 @@ mod tests {
         );
 
         db.events.write().clear();
-        lifecycle.check_for_work(now, Instant::now());
+        lifecycle.check_for_work(now, Instant::now(), false);
         assert_eq!(*db.events.read(), vec![MoverEvents::Compact(vec![17, 18])]);
     }
 
@@ -1478,7 +1479,7 @@ mod tests {
         let db = TestDb::from_partitions(rules, partitions);
         let mut lifecycle = LifecyclePolicy::new(&db);
 
-        lifecycle.check_for_work(now, Instant::now());
+        lifecycle.check_for_work(now, Instant::now(), false);
         assert_eq!(
             *db.events.read(),
             vec![
@@ -1490,7 +1491,7 @@ mod tests {
         db.events.write().clear();
 
         // Compaction slots freed up, other partition can now compact.
-        lifecycle.check_for_work(now, Instant::now());
+        lifecycle.check_for_work(now, Instant::now(), false);
         assert_eq!(*db.events.read(), vec![MoverEvents::Compact(vec![200]),],);
     }
 
@@ -1569,7 +1570,7 @@ mod tests {
         let db = TestDb::from_partitions(rules, partitions);
         let mut lifecycle = LifecyclePolicy::new(&db);
 
-        lifecycle.check_for_work(from_secs(0), now);
+        lifecycle.check_for_work(from_secs(0), now, false);
         assert_eq!(
             *db.events.read(),
             vec![
@@ -1586,6 +1587,35 @@ mod tests {
     }
 
     #[test]
+    fn test_suppress_persistance() {
+        let rules = LifecycleRules {
+            persist: true,
+            persist_row_threshold: NonZeroUsize::new(1_000).unwrap(),
+            late_arrive_window_seconds: NonZeroU32::new(10).unwrap(),
+            persist_age_threshold_seconds: NonZeroU32::new(10).unwrap(),
+            max_active_compactions: MaxActiveCompactions(NonZeroU32::new(10).unwrap()),
+            ..Default::default()
+        };
+        let now = Instant::now();
+
+        let partitions = vec![
+            // Sufficient rows => could persist but should be suppressed
+            TestPartition::new(vec![
+                TestChunk::new(2, 0, ChunkStorage::ClosedMutableBuffer)
+                    .with_min_timestamp(from_secs(10)),
+                TestChunk::new(3, 0, ChunkStorage::ReadBuffer).with_min_timestamp(from_secs(5)),
+            ])
+            .with_persistence(1_000, now, from_secs(20)),
+        ];
+
+        let db = TestDb::from_partitions(rules, partitions);
+        let mut lifecycle = LifecyclePolicy::new(&db);
+
+        lifecycle.check_for_work(from_secs(0), now, true);
+        assert_eq!(*db.events.read(), vec![MoverEvents::Compact(vec![2, 3]),]);
+    }
+
+    #[test]
     fn test_moves_open() {
         let rules = LifecycleRules {
             late_arrive_window_seconds: NonZeroU32::new(10).unwrap(),
@@ -1596,7 +1626,7 @@ mod tests {
         let db = TestDb::new(rules, chunks);
         let mut lifecycle = LifecyclePolicy::new(&db);
 
-        lifecycle.check_for_work(from_secs(80), Instant::now());
+        lifecycle.check_for_work(from_secs(80), Instant::now(), false);
         assert_eq!(*db.events.read(), vec![MoverEvents::Compact(vec![0])]);
     }
 
@@ -1611,7 +1641,7 @@ mod tests {
         let db = TestDb::new(rules, chunks);
         let mut lifecycle = LifecyclePolicy::new(&db);
 
-        lifecycle.check_for_work(from_secs(80), Instant::now());
+        lifecycle.check_for_work(from_secs(80), Instant::now(), false);
         assert_eq!(*db.events.read(), vec![MoverEvents::Compact(vec![0])]);
     }
 
@@ -1629,13 +1659,14 @@ mod tests {
         chunk.write().lifecycle_action = Some(tracker.clone());
 
         // Shouldn't do anything
-        lifecycle.check_for_work(from_secs(0), tracker.start_instant());
+        lifecycle.check_for_work(from_secs(0), tracker.start_instant(), false);
         assert!(chunk.read().lifecycle_action().is_some());
 
         // Shouldn't do anything as job hasn't finished
         lifecycle.check_for_work(
             from_secs(0),
             tracker.start_instant() + LIFECYCLE_ACTION_BACKOFF,
+            false,
         );
         assert!(chunk.read().lifecycle_action().is_some());
 
@@ -1643,13 +1674,14 @@ mod tests {
         std::mem::drop(r0);
 
         // Shouldn't do anything as insufficient time passed
-        lifecycle.check_for_work(from_secs(0), tracker.start_instant());
+        lifecycle.check_for_work(from_secs(0), tracker.start_instant(), false);
         assert!(chunk.read().lifecycle_action().is_some());
 
         // Should clear job
         lifecycle.check_for_work(
             from_secs(0),
             tracker.start_instant() + LIFECYCLE_ACTION_BACKOFF,
+            false,
         );
         assert!(chunk.read().lifecycle_action().is_none());
     }

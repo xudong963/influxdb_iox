@@ -781,7 +781,7 @@ impl Db {
                     self.worker_iterations_lifecycle
                         .fetch_add(1, Ordering::Relaxed);
                     tokio::select! {
-                        _ = policy.check_for_work(Utc::now(), std::time::Instant::now()) => {},
+                        _ = policy.check_for_work(Utc::now(), std::time::Instant::now(), false) => {},
                         _ = shutdown.cancelled() => break,
                     }
                 }
