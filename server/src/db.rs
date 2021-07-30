@@ -749,13 +749,15 @@ impl Db {
     ///
     /// # Panics
     /// Panics when another replay or background worker is running at the same time.
-    pub async fn perform_replay(&self, replay_plan: &ReplayPlan) -> Result<()> {
+    pub async fn perform_replay(self: &Arc<Self>, replay_plan: &ReplayPlan) -> Result<()> {
         use crate::db::replay::perform_replay;
         let _permit = self
             .background_worker_semaphore
             .try_acquire()
             .expect("other replay or background worker running");
-        perform_replay(self, replay_plan).await.context(ReplayError)
+        perform_replay(Arc::clone(self), replay_plan)
+            .await
+            .context(ReplayError)
     }
 
     /// Background worker function.
@@ -864,16 +866,27 @@ impl Db {
             let sequenced_entry = Arc::new(sequenced_entry);
 
             // store entry
-            match self.store_sequenced_entry(Arc::clone(&sequenced_entry)) {
-                Ok(_) => {
-                    red_observation.ok();
-                }
-                Err(e) => {
-                    debug!(
-                        ?e,
-                        "Error storing SequencedEntry from write buffer in database"
-                    );
-                    red_observation.error();
+            loop {
+                match self.store_sequenced_entry(Arc::clone(&sequenced_entry)) {
+                    Ok(_) => {
+                        red_observation.ok();
+                        break;
+                    }
+                    Err(Error::HardLimitReached {}) => {
+                        // wait a bit and retry
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        debug!(
+                            ?e,
+                            "Error storing SequencedEntry from write buffer in database"
+                        );
+                        red_observation.error();
+
+                        // no retry
+                        break;
+                    }
                 }
             }
 

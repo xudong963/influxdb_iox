@@ -1,15 +1,17 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
+    time::Duration,
 };
 
+use chrono::Utc;
 use futures::TryStreamExt;
 use observability_deps::tracing::info;
 use persistence_windows::checkpoint::ReplayPlan;
 use snafu::{ResultExt, Snafu};
 use write_buffer::config::WriteBufferConfig;
 
-use crate::Db;
+use crate::{db::lifecycle::ArcDb, Db};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -65,7 +67,7 @@ pub enum Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Perform sequencer-driven replay for this DB.
-pub async fn perform_replay(db: &Db, replay_plan: &ReplayPlan) -> Result<()> {
+pub async fn perform_replay(db: Arc<Db>, replay_plan: &ReplayPlan) -> Result<()> {
     if let Some(WriteBufferConfig::Reading(write_buffer)) = &db.write_buffer {
         let db_name = db.rules.read().db_name().to_string();
         info!(%db_name, "starting replay");
@@ -122,6 +124,8 @@ pub async fn perform_replay(db: &Db, replay_plan: &ReplayPlan) -> Result<()> {
         }
 
         // replay ranges
+        let mut policy = ::lifecycle::LifecyclePolicy::new(ArcDb(Arc::clone(&db)));
+        let mut policy_counter = 0usize;
         for (sequencer_id, mut stream) in write_buffer.streams() {
             if let Some(min_max) = replay_ranges.get(&sequencer_id) {
                 if min_max.min().is_none() {
@@ -142,6 +146,14 @@ pub async fn perform_replay(db: &Db, replay_plan: &ReplayPlan) -> Result<()> {
                     .await
                     .context(EntryError { sequencer_id })?
                 {
+                    // potentially trigger compaction
+                    if policy_counter % 100 == 0 {
+                        policy
+                            .check_for_work(Utc::now(), std::time::Instant::now(), true)
+                            .await;
+                    }
+                    policy_counter += 1;
+
                     let sequence = *entry.sequence().expect("entry must be sequenced");
                     if sequence.number > min_max.max() {
                         return Err(Error::EntryLostError {
@@ -152,9 +164,28 @@ pub async fn perform_replay(db: &Db, replay_plan: &ReplayPlan) -> Result<()> {
                     }
 
                     let entry = Arc::new(entry);
-                    db.store_sequenced_entry(entry)
-                        .map_err(Box::new)
-                        .context(StoreError { sequencer_id })?;
+                    let n_tries = 10;
+                    for n_try in 1..=n_tries {
+                        match db.store_sequenced_entry(Arc::clone(&entry)) {
+                            Ok(_) => {
+                                break;
+                            }
+                            Err(crate::db::Error::HardLimitReached {}) if n_try < n_tries => {
+                                // try to trigger compaction
+                                policy
+                                    .check_for_work(Utc::now(), std::time::Instant::now(), true)
+                                    .await;
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                continue;
+                            }
+                            Err(e) => {
+                                return Err(Error::StoreError {
+                                    sequencer_id,
+                                    source: Box::new(e),
+                                });
+                            }
+                        }
+                    }
 
                     // done replaying?
                     if sequence.number == min_max.max() {
@@ -174,7 +205,7 @@ mod tests {
 
     use std::{
         convert::TryFrom,
-        num::NonZeroU32,
+        num::{NonZeroU32, NonZeroUsize},
         sync::Arc,
         time::{Duration, Instant},
     };
@@ -445,6 +476,7 @@ mod tests {
                     tokio::sync::Mutex::new(Box::new(write_buffer) as _),
                 )))
                 .lifecycle_rules(data_types::database_rules::LifecycleRules {
+                    buffer_size_hard: Some(NonZeroUsize::new(10_000).unwrap()),
                     late_arrive_window_seconds: NonZeroU32::try_from(1).unwrap(),
                     ..Default::default()
                 })
@@ -1187,6 +1219,52 @@ mod tests {
                         "+-----+------------------+--------------------------------+",
                     ],
                 )]),
+            ],
+        }
+        .run()
+        .await;
+    }
+
+    #[tokio::test]
+    async fn replay_compacts() {
+        // these numbers are handtuned to trigger hard buffer limits w/o making the test too big, it still takes ~10s
+        // :(
+        let n_entries = 400u64;
+        let sequenced_entries: Vec<_> = (0..n_entries)
+            .map(|sequence_number| {
+                let lp = format!(
+                    "table_1,tag_partition_by=a foo=\"hello\",bar=10 {}",
+                    sequence_number
+                );
+                let lp: &'static str = Box::leak(Box::new(lp));
+                TestSequencedEntry {
+                    sequencer_id: 0,
+                    sequence_number,
+                    lp,
+                }
+            })
+            .collect();
+
+        ReplayTest {
+            n_sequencers: 1,
+            steps: vec![
+                Step::Ingest(sequenced_entries),
+                Step::Ingest(vec![TestSequencedEntry {
+                    sequencer_id: 0,
+                    sequence_number: n_entries,
+                    lp: "table_2,tag_partition_by=a bar=11 10",
+                }]),
+                Step::Await(vec![Check::Partitions(vec![
+                    ("table_1", "tag_partition_by_a"),
+                    ("table_2", "tag_partition_by_a"),
+                ])]),
+                Step::Persist(vec![("table_2", "tag_partition_by_a")]),
+                Step::Restart,
+                Step::Assert(vec![Check::Partitions(vec![(
+                    "table_2",
+                    "tag_partition_by_a",
+                )])]),
+                Step::Replay,
             ],
         }
         .run()
