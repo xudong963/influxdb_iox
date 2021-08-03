@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 /// The minimum and maximum sequence numbers seen for a given sequencer.
 ///
 /// **IMPORTANT: These ranges include their start and their end (aka `[start, end]`)!**
@@ -62,6 +64,46 @@ impl OptionalMinMaxSequence {
     pub fn max(&self) -> u64 {
         self.max
     }
+
+    /// Compares range the other.
+    ///
+    /// Returns `None` if ranges cannot be compared.
+    pub fn try_cmp(&self, other: &Self) -> Option<Ordering> {
+        let min1 = self
+            .min
+            .map(Some)
+            .unwrap_or_else(|| self.max.checked_add(1));
+        let min2 = other
+            .min
+            .map(Some)
+            .unwrap_or_else(|| other.max.checked_add(1));
+
+        let cmp_min = match (min1, min2) {
+            (Some(min1), Some(min2)) => {
+                // no overflow
+                min1.cmp(&min2)
+            }
+            (Some(_), None) => {
+                // min2 overflowed and is greater
+                Ordering::Less
+            }
+            (None, Some(_)) => {
+                // min1 overflowed and is greater
+                Ordering::Greater
+            }
+            (None, None) => {
+                // both overflowed and are equal
+                Ordering::Equal
+            }
+        };
+
+        match (cmp_min, self.max.cmp(&other.max)) {
+            (Ordering::Equal, x) => Some(x),
+            (x, Ordering::Equal) => Some(x),
+            (x, y) if x == y => Some(x),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -106,5 +148,63 @@ mod tests {
     #[should_panic(expected = "min (11) is greater than max (10) sequence")]
     fn test_opt_min_max_checks_values() {
         OptionalMinMaxSequence::new(Some(11), 10);
+    }
+
+    #[test]
+    fn test_opt_min_max_try_cmp() {
+        assert_eq!(
+            OptionalMinMaxSequence::new(Some(10), 10)
+                .try_cmp(&OptionalMinMaxSequence::new(Some(10), 10)),
+            Some(Ordering::Equal),
+        );
+
+        assert_eq!(
+            OptionalMinMaxSequence::new(None, 10)
+                .try_cmp(&OptionalMinMaxSequence::new(Some(10), 10)),
+            Some(Ordering::Greater),
+        );
+        assert_eq!(
+            OptionalMinMaxSequence::new(Some(10), 10)
+                .try_cmp(&OptionalMinMaxSequence::new(None, 10)),
+            Some(Ordering::Less),
+        );
+
+        assert_eq!(
+            OptionalMinMaxSequence::new(None, 10)
+                .try_cmp(&OptionalMinMaxSequence::new(Some(11), 11)),
+            Some(Ordering::Less),
+        );
+
+        assert_eq!(
+            OptionalMinMaxSequence::new(Some(10), 10)
+                .try_cmp(&OptionalMinMaxSequence::new(Some(9), 11)),
+            None,
+        );
+        assert_eq!(
+            OptionalMinMaxSequence::new(None, 10)
+                .try_cmp(&OptionalMinMaxSequence::new(Some(9), 11)),
+            None,
+        );
+
+        assert_eq!(
+            OptionalMinMaxSequence::new(Some(u64::MAX), u64::MAX)
+                .try_cmp(&OptionalMinMaxSequence::new(Some(u64::MAX), u64::MAX)),
+            Some(Ordering::Equal),
+        );
+        assert_eq!(
+            OptionalMinMaxSequence::new(None, u64::MAX)
+                .try_cmp(&OptionalMinMaxSequence::new(None, u64::MAX)),
+            Some(Ordering::Equal),
+        );
+        assert_eq!(
+            OptionalMinMaxSequence::new(None, u64::MAX)
+                .try_cmp(&OptionalMinMaxSequence::new(Some(u64::MAX), u64::MAX)),
+            Some(Ordering::Greater),
+        );
+        assert_eq!(
+            OptionalMinMaxSequence::new(Some(u64::MAX), u64::MAX)
+                .try_cmp(&OptionalMinMaxSequence::new(None, u64::MAX)),
+            Some(Ordering::Less),
+        );
     }
 }

@@ -198,6 +198,7 @@
 //! // database is now ready for normal playback
 //! ```
 use std::{
+    cmp::Ordering,
     collections::{
         btree_map::Entry::{Occupied, Vacant},
         BTreeMap,
@@ -379,6 +380,65 @@ impl DatabaseCheckpoint {
         self.sequencer_numbers
             .iter()
             .map(|(sequencer_id, min_max)| (*sequencer_id, *min_max))
+    }
+
+    /// Compares current database checkpoint the other.
+    ///
+    /// Returns `None` if checkpoints cannot be compared, e.g. due to different sequencer sets or because sequence
+    /// ranges did not change in a consistent way.
+    pub fn try_cmp(&self, other: &Self) -> Option<Ordering> {
+        let mut global_outcome = Ordering::Equal;
+
+        let mut it1 = self.sequencer_numbers.iter().peekable();
+        let mut it2 = other.sequencer_numbers.iter().peekable();
+
+        loop {
+            let local_outcome = match (it1.peek(), it2.peek()) {
+                (Some((sequencer_id1, min_max1)), Some((sequencer_id2, min_max2))) => {
+                    match sequencer_id1.cmp(sequencer_id2) {
+                        Ordering::Less => {
+                            // new sequencer got introduced in it1
+                            it1.next();
+                            Ordering::Greater
+                        }
+                        Ordering::Equal => {
+                            // same sequencer, compare ranges
+                            let res = min_max1.try_cmp(min_max2)?;
+                            it1.next();
+                            it2.next();
+                            res
+                        }
+                        Ordering::Greater => {
+                            // new sequencer got introduced in it2
+                            it2.next();
+                            Ordering::Less
+                        }
+                    }
+                }
+                (Some(_), None) => {
+                    // new sequencer got introduced in it1
+                    it1.next();
+                    Ordering::Greater
+                }
+                (None, Some(_)) => {
+                    // new sequencer got introduced in it2
+                    it2.next();
+                    Ordering::Less
+                }
+                (None, None) => {
+                    break;
+                }
+            };
+
+            global_outcome = match (global_outcome, local_outcome) {
+                (Ordering::Equal, x) => x,
+                (x, Ordering::Equal) => x,
+                (x, y) if x == y => x,
+                _ => return None,
+            };
+        }
+
+        Some(global_outcome)
     }
 }
 
@@ -617,6 +677,9 @@ mod tests {
 
     /// Create sequence numbers map.
     macro_rules! sequencer_numbers {
+        {} => {
+            BTreeMap::new()
+        };
         {$($sequencer_number:expr => ($min:expr, $max:expr)),*} => {
             {
                 let mut sequencer_numbers = BTreeMap::new();
@@ -688,6 +751,47 @@ mod tests {
         assert_eq!(dckpt.sequencer_ids(), vec![1, 2]);
 
         assert_eq!(dckpt, db_ckpt!({1 => (Some(10), 20), 2 => (None, 15)}));
+    }
+
+    #[test]
+    fn test_database_checkpoint_cmp() {
+        assert_eq!(db_ckpt!({}).try_cmp(&db_ckpt!({})), Some(Ordering::Equal),);
+
+        assert_eq!(
+            db_ckpt!({1 => (None, 0)}).try_cmp(&db_ckpt!({})),
+            Some(Ordering::Greater),
+        );
+        assert_eq!(
+            db_ckpt!({}).try_cmp(&db_ckpt!({1 => (None, 0)})),
+            Some(Ordering::Less),
+        );
+
+        assert_eq!(
+            db_ckpt!({1 => (None, 0), 2 => (None, 1)}).try_cmp(&db_ckpt!({2 => (None, 1)})),
+            Some(Ordering::Greater),
+        );
+        assert_eq!(
+            db_ckpt!({2 => (None, 1)}).try_cmp(&db_ckpt!({1 => (None, 0), 2 => (None, 1)})),
+            Some(Ordering::Less),
+        );
+
+        assert_eq!(
+            db_ckpt!({1 => (None, 0)}).try_cmp(&db_ckpt!({2 => (None, 1)})),
+            None,
+        );
+
+        assert_eq!(
+            db_ckpt!({1 => (None, 0)}).try_cmp(&db_ckpt!({1 => (None, 1)})),
+            Some(Ordering::Less),
+        );
+        assert_eq!(
+            db_ckpt!({1 => (Some(1), 1)}).try_cmp(&db_ckpt!({1 => (Some(0), 2)})),
+            None,
+        );
+        assert_eq!(
+            db_ckpt!({1 => (None, 0), 2 => (None, 0)}).try_cmp(&db_ckpt!({1 => (None, 1)})),
+            None,
+        );
     }
 
     #[test]
