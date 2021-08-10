@@ -5097,6 +5097,7 @@ dependencies = [
  "entry",
  "futures",
  "observability_deps",
+ "once_cell",
  "parking_lot",
  "rdkafka",
  "tokio",

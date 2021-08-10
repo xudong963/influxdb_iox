@@ -1,10 +1,16 @@
-use std::{collections::BTreeMap, sync::Arc, task::Poll};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Weak},
+    task::Poll,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use entry::{Entry, Sequence, SequencedEntry};
 use futures::{stream, FutureExt, StreamExt};
-use parking_lot::Mutex;
+use once_cell::sync::OnceCell;
+use parking_lot::{Mutex, MutexGuard, RwLock};
+use uuid::Uuid;
 
 use crate::core::{
     EntryStream, FetchHighWatermark, FetchHighWatermarkFut, WriteBufferError, WriteBufferReading,
@@ -12,11 +18,18 @@ use crate::core::{
 };
 
 type EntryResVec = Vec<Result<SequencedEntry, WriteBufferError>>;
+type Entries = BTreeMap<u32, EntryResVec>;
+type SharedEntries = Mutex<Entries>;
+
+static STATES: OnceCell<RwLock<BTreeMap<Uuid, Weak<SharedEntries>>>> = OnceCell::new();
 
 /// Mocked entries for [`MockBufferForWriting`] and [`MockBufferForReading`].
 #[derive(Debug, Clone)]
 pub struct MockBufferSharedState {
-    entries: Arc<Mutex<BTreeMap<u32, EntryResVec>>>,
+    /// Optional so we can implement `Drop`
+    entries: Option<Arc<SharedEntries>>,
+
+    id: Uuid,
 }
 
 impl MockBufferSharedState {
@@ -25,9 +38,17 @@ impl MockBufferSharedState {
         let entries: BTreeMap<_, _> = (0..n_sequencers)
             .map(|sequencer_id| (sequencer_id, vec![]))
             .collect();
+        let entries = Arc::new(Mutex::new(entries));
+        let id = Uuid::new_v4();
+
+        {
+            let mut guard = STATES.get_or_init(Default::default).write();
+            guard.insert(id, Arc::downgrade(&entries));
+        }
 
         Self {
-            entries: Arc::new(Mutex::new(entries)),
+            entries: Some(entries),
+            id,
         }
     }
 
@@ -39,7 +60,7 @@ impl MockBufferSharedState {
     /// - when sequence number in entry is not larger the current maximum
     pub fn push_entry(&self, entry: SequencedEntry) {
         let sequence = entry.sequence().expect("entry must be sequenced");
-        let mut entries = self.entries.lock();
+        let mut entries = self.entries();
         let entry_vec = entries.get_mut(&sequence.id).expect("invalid sequencer ID");
         let max_sequence_number = entry_vec
             .iter()
@@ -66,7 +87,7 @@ impl MockBufferSharedState {
     /// # Panics
     /// - when sequencer does not exist
     pub fn push_error(&self, error: WriteBufferError, sequencer_id: u32) {
-        let mut entries = self.entries.lock();
+        let mut entries = self.entries();
         let entry_vec = entries
             .get_mut(&sequencer_id)
             .expect("invalid sequencer ID");
@@ -78,7 +99,7 @@ impl MockBufferSharedState {
     /// # Panics
     /// - when sequencer does not exist
     pub fn get_messages(&self, sequencer_id: u32) -> Vec<Result<SequencedEntry, WriteBufferError>> {
-        let mut entries = self.entries.lock();
+        let mut entries = self.entries();
         let entry_vec = entries
             .get_mut(&sequencer_id)
             .expect("invalid sequencer ID");
@@ -90,6 +111,41 @@ impl MockBufferSharedState {
                 Err(e) => Err(e.to_string().into()),
             })
             .collect()
+    }
+
+    /// ID that can be fed into [`get`](Self::get) to get another shared instance.
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+
+    /// The state must be referenced to be available via this method.
+    pub fn get(id: Uuid) -> Option<Self> {
+        let guard = STATES.get()?.read();
+
+        guard
+            .get(&id)
+            .map(|entries| Weak::upgrade(entries))
+            .flatten()
+            .map(|entries| Self {
+                entries: Some(entries),
+                id,
+            })
+    }
+
+    fn entries(&self) -> MutexGuard<'_, Entries> {
+        self.entries.as_ref().expect("not dropped").lock()
+    }
+}
+
+impl Drop for MockBufferSharedState {
+    fn drop(&mut self) {
+        self.entries.take();
+
+        if let Some(global_state) = STATES.get() {
+            let mut guard = global_state.write();
+
+            guard.retain(|_id, entries| Weak::upgrade(entries).is_some());
+        }
     }
 }
 
@@ -111,7 +167,7 @@ impl WriteBufferWriting for MockBufferForWriting {
         entry: &Entry,
         sequencer_id: u32,
     ) -> Result<(Sequence, DateTime<Utc>), WriteBufferError> {
-        let mut entries = self.state.entries.lock();
+        let mut entries = self.state.entries();
         let sequencer_entries = entries.get_mut(&sequencer_id).unwrap();
 
         let sequence_number = sequencer_entries
@@ -139,6 +195,10 @@ impl WriteBufferWriting for MockBufferForWriting {
 
         Ok((sequence, timestamp))
     }
+
+    fn type_name(&self) -> &'static str {
+        "mock"
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -155,6 +215,10 @@ impl WriteBufferWriting for MockBufferForWritingThatAlwaysErrors {
             "Something bad happened on the way to writing an entry in the write buffer",
         )
         .into())
+    }
+
+    fn type_name(&self) -> &'static str {
+        "mock"
     }
 }
 
@@ -174,7 +238,7 @@ pub struct MockBufferForReading {
 
 impl MockBufferForReading {
     pub fn new(state: MockBufferSharedState) -> Self {
-        let n_sequencers = state.entries.lock().len() as u32;
+        let n_sequencers = state.entries().len() as u32;
         let playback_states: BTreeMap<_, _> = (0..n_sequencers)
             .map(|sequencer_id| {
                 (
@@ -214,7 +278,7 @@ impl WriteBufferReading for MockBufferForReading {
             let playback_states = Arc::clone(&self.playback_states);
 
             let stream = stream::poll_fn(move |_ctx| {
-                let entries = shared_state.entries.lock();
+                let entries = shared_state.entries();
                 let mut playback_states = playback_states.lock();
 
                 let entry_vec = entries.get(&sequencer_id).unwrap();
@@ -256,7 +320,7 @@ impl WriteBufferReading for MockBufferForReading {
                 let shared_state = shared_state.clone();
 
                 let fut = async move {
-                    let entries = shared_state.entries.lock();
+                    let entries = shared_state.entries();
                     let entry_vec = entries.get(&sequencer_id).unwrap();
                     let watermark = entry_vec
                         .iter()
@@ -303,6 +367,10 @@ impl WriteBufferReading for MockBufferForReading {
         }
 
         Ok(())
+    }
+
+    fn type_name(&self) -> &'static str {
+        "mock"
     }
 }
 
@@ -426,5 +494,34 @@ mod tests {
     fn test_state_get_messages_panic_wrong_sequencer() {
         let state = MockBufferSharedState::empty_with_n_sequencers(2);
         state.get_messages(2);
+    }
+
+    #[test]
+    fn test_shared_via_id() {
+        let state = MockBufferSharedState::empty_with_n_sequencers(2);
+        let id = state.id();
+
+        // while state is alive, we can get a copy of it
+        let state2 = MockBufferSharedState::get(id).unwrap();
+
+        // this copy shares all entries
+        let entry = lp_to_entry("upc,region=east user=1 100");
+        let sequence = Sequence::new(1, 13);
+        let sequenced_entry = SequencedEntry::new_from_sequence(sequence, Utc::now(), entry);
+        state.push_entry(sequenced_entry.clone());
+        let messages = state2.get_messages(1);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            (&messages[0]).as_ref().unwrap().entry(),
+            sequenced_entry.entry()
+        );
+
+        // dropping the original instance but keeping the copy still allows to get more copies
+        drop(state);
+        MockBufferSharedState::get(id).unwrap();
+
+        // dropping all copies wipes the global state
+        drop(state2);
+        assert!(MockBufferSharedState::get(id).is_none());
     }
 }
