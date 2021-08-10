@@ -155,6 +155,9 @@ pub enum Error {
     #[snafu(display("error wiping preserved catalog: {}", source))]
     WipePreservedCatalog { source: database::Error },
 
+    #[snafu(display("error skipping replay: {}", source))]
+    SkipReplay { source: database::Error },
+
     #[snafu(display("database error: {}", source))]
     UnknownDatabaseError { source: DatabaseError },
 
@@ -1011,10 +1014,10 @@ where
         })
     }
 
-    /// Recover database that has failed to load its catalog by wiping it
+    /// Recover database that has failed to load its catalog by wiping it.
     ///
-    /// The DB must exist in the server and have failed to load the catalog for this to work
-    /// This is done to prevent race conditions between DB jobs and this command
+    /// The DB must exist in the server and have failed to load the catalog for this to work.
+    /// This is done to prevent race conditions between DB jobs and this command.
     pub fn wipe_preserved_catalog(
         &self,
         db_name: &DatabaseName<'static>,
@@ -1029,6 +1032,25 @@ where
         let fut = database
             .wipe_preserved_catalog()
             .context(WipePreservedCatalog)?;
+
+        let _ = tokio::spawn(fut.track(registration));
+
+        Ok(tracker)
+    }
+
+    /// Recover database that has failed to replay by skipping replay
+    ///
+    /// The DB must exist in the server and have failed to replay for this to work.
+    /// This is done to prevent race conditions between DB jobs and this command.
+    pub fn skip_replay(&self, db_name: &DatabaseName<'static>) -> Result<TaskTracker<Job>> {
+        let database = self.database(db_name)?;
+        let registry = self.shared.application.job_registry();
+
+        let (tracker, registration) = registry.register(Job::SkipReplay {
+            db_name: Arc::from(db_name.as_str()),
+        });
+
+        let fut = database.skip_replay().context(SkipReplay)?;
 
         let _ = tokio::spawn(fut.track(registration));
 
@@ -1300,6 +1322,7 @@ async fn persist_database_rules(
 mod tests {
     use std::{
         convert::{Infallible, TryFrom},
+        num::NonZeroU32,
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -1309,14 +1332,16 @@ mod tests {
 
     use arrow::record_batch::RecordBatch;
     use bytes::Bytes;
+    use chrono::Utc;
+    use entry::{test_helpers::lp_to_entries, Sequence, SequencedEntry};
     use futures::TryStreamExt;
 
     use arrow_util::assert_batches_eq;
     use connection::test_helpers::{TestConnectionManager, TestRemoteServer};
-    use data_types::chunk_metadata::ChunkAddr;
     use data_types::database_rules::{
         HashRing, LifecycleRules, PartitionTemplate, ShardConfig, TemplatePart, NO_SHARD_CONFIG,
     };
+    use data_types::{chunk_metadata::ChunkAddr, database_rules::WriteBufferConnection};
     use generated_types::database_rules::decode_database_rules;
     use influxdb_line_protocol::parse_lines;
     use metrics::TestMetricRegistry;
@@ -1324,6 +1349,7 @@ mod tests {
     use parquet_file::catalog::{test_helpers::TestCatalogState, PreservedCatalog};
     use query::{exec::ExecutorType, frontend::sql::SqlQueryPlanner, QueryDatabase};
     use test_helpers::assert_contains;
+    use write_buffer::mock::MockBufferSharedState;
 
     use super::*;
 
@@ -2243,6 +2269,147 @@ mod tests {
         )
         .await
         .unwrap());
+    }
+
+    #[tokio::test]
+    async fn skip_replay() {
+        // setup
+        let application = make_application();
+        let server_id = ServerId::try_from(1).unwrap();
+        let partition_template = PartitionTemplate {
+            parts: vec![TemplatePart::Column("partition_by".to_string())],
+        };
+
+        // create write buffer
+        let state = MockBufferSharedState::empty_with_n_sequencers(1);
+        let entry_a = lp_to_entries("table_1,partition_by=a foo=1 10", &partition_template)
+            .pop()
+            .unwrap();
+        let entry_b = lp_to_entries("table_1,partition_by=b foo=2 20", &partition_template)
+            .pop()
+            .unwrap();
+        state.push_entry(SequencedEntry::new_from_sequence(
+            Sequence::new(0, 10),
+            Utc::now(),
+            entry_a,
+        ));
+        state.push_entry(SequencedEntry::new_from_sequence(
+            Sequence::new(0, 11),
+            Utc::now(),
+            entry_b,
+        ));
+
+        // Create temporary server to create existing databases
+        let server = make_server(Arc::clone(&application));
+        server.set_id(server_id).unwrap();
+        server.wait_for_init().await.unwrap();
+
+        // setup DB
+        let db_name = DatabaseName::new("test_db").unwrap();
+        let rules = DatabaseRules {
+            name: db_name.clone(),
+            partition_template: partition_template.clone(),
+            lifecycle_rules: data_types::database_rules::LifecycleRules {
+                late_arrive_window_seconds: NonZeroU32::try_from(1).unwrap(),
+                ..Default::default()
+            },
+            routing_rules: None,
+            worker_cleanup_avg_sleep: Duration::from_secs(2),
+            write_buffer_connection: Some(WriteBufferConnection::Reading(format!(
+                "mock://{}",
+                state.id()
+            ))),
+        };
+        server.create_database(rules.clone()).await.unwrap();
+
+        // wait for ingest
+        let db = server.db(&db_name).unwrap();
+        let t_0 = Instant::now();
+        loop {
+            // use later partition here so that we can implicitely wait for both entries
+            if db.partition_summary("table_1", "partition_by_b").is_some() {
+                break;
+            }
+
+            assert!(t_0.elapsed() < Duration::from_secs(10));
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // partition a was forgotten, partition b is still persisted
+        assert!(db.partition_summary("table_1", "partition_by_a").is_some());
+
+        // persist one partition
+        db.persist_partition(
+            "table_1",
+            "partition_by_b",
+            Instant::now() + Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+
+        // boot actual test server
+        let server = make_server(Arc::clone(&application));
+
+        // cannot skip if server ID is not set
+        assert_eq!(
+            server.skip_replay(&db_name).unwrap_err().to_string(),
+            "id not set"
+        );
+
+        // break write buffer by removing entries
+        state.clear_messages(0);
+        let entry_c = lp_to_entries("table_1,partition_by=c foo=3 30", &partition_template)
+            .pop()
+            .unwrap();
+        state.push_entry(SequencedEntry::new_from_sequence(
+            Sequence::new(0, 12),
+            Utc::now(),
+            entry_c,
+        ));
+
+        // start server
+        server.set_id(ServerId::try_from(1).unwrap()).unwrap();
+        server.wait_for_init().await.unwrap();
+
+        // db is broken
+        let database = server.database(&db_name).unwrap();
+        let err = database.wait_for_init().await.unwrap_err();
+        assert!(matches!(err.as_ref(), database::InitError::Replay { .. }));
+
+        // skip replay
+        let tracker = server.skip_replay(&db_name).unwrap();
+        let metadata = tracker.metadata();
+        let expected_metadata = Job::SkipReplay {
+            db_name: Arc::from(db_name.as_str()),
+        };
+        assert_eq!(metadata, &expected_metadata);
+        tracker.join().await;
+        database.wait_for_init().await.unwrap();
+
+        // wait for ingest
+        let entry_d = lp_to_entries("table_1,partition_by=d foo=4 40", &partition_template)
+            .pop()
+            .unwrap();
+        state.push_entry(SequencedEntry::new_from_sequence(
+            Sequence::new(0, 13),
+            Utc::now(),
+            entry_d,
+        ));
+        let db = server.db(&db_name).unwrap();
+        let t_0 = Instant::now();
+        loop {
+            if db.partition_summary("table_1", "partition_by_d").is_some() {
+                break;
+            }
+
+            assert!(t_0.elapsed() < Duration::from_secs(10));
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // partition a was forgotten, partition b is still persisted, partition c was skipped
+        assert!(db.partition_summary("table_1", "partition_by_a").is_none());
+        assert!(db.partition_summary("table_1", "partition_by_b").is_some());
+        assert!(db.partition_summary("table_1", "partition_by_c").is_none());
     }
 
     #[tokio::test]

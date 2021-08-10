@@ -39,6 +39,7 @@ message OperationMetadata {
     CompactChunks compact_chunks = 10;
     PersistChunks persist_chunks = 11;
     DropChunk drop_chunk = 12;
+    SkipReplay skip_replay = 17;
   }
 }
 
@@ -128,6 +129,12 @@ message DropChunk {
 
 // Wipe preserved catalog
 message WipePreservedCatalog {
+  // name of the database
+  string db_name = 1;
+}
+
+// Skip replay
+message SkipReplay {
   // name of the database
   string db_name = 1;
 }

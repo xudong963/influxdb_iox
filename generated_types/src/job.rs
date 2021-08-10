@@ -31,6 +31,9 @@ impl From<Job> for management::operation_metadata::Job {
                     db_name: db_name.to_string(),
                 })
             }
+            Job::SkipReplay { db_name } => Self::SkipReplay(management::SkipReplay {
+                db_name: db_name.to_string(),
+            }),
             Job::CompactChunks { partition, chunks } => {
                 Self::CompactChunks(management::CompactChunks {
                     db_name: partition.db_name.to_string(),
@@ -96,6 +99,9 @@ impl From<management::operation_metadata::Job> for Job {
                     db_name: Arc::from(db_name.as_str()),
                 }
             }
+            Job::SkipReplay(management::SkipReplay { db_name }) => Self::SkipReplay {
+                db_name: Arc::from(db_name.as_str()),
+            },
             Job::CompactChunks(management::CompactChunks {
                 db_name,
                 partition_key,

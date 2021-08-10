@@ -39,6 +39,9 @@ pub enum Job {
 
     /// Wipe preserved catalog
     WipePreservedCatalog { db_name: Arc<str> },
+
+    /// Skip replay
+    SkipReplay { db_name: Arc<str> },
 }
 
 impl Job {
@@ -52,6 +55,7 @@ impl Job {
             Self::PersistChunks { partition, .. } => Some(&partition.db_name),
             Self::DropChunk { chunk, .. } => Some(&chunk.db_name),
             Self::WipePreservedCatalog { db_name, .. } => Some(db_name),
+            Self::SkipReplay { db_name, .. } => Some(db_name),
         }
     }
 
@@ -65,6 +69,7 @@ impl Job {
             Self::PersistChunks { partition, .. } => Some(&partition.partition_key),
             Self::DropChunk { chunk, .. } => Some(&chunk.partition_key),
             Self::WipePreservedCatalog { .. } => None,
+            Self::SkipReplay { .. } => None,
         }
     }
 
@@ -78,6 +83,7 @@ impl Job {
             Self::PersistChunks { partition, .. } => Some(&partition.table_name),
             Self::DropChunk { chunk, .. } => Some(&chunk.table_name),
             Self::WipePreservedCatalog { .. } => None,
+            Self::SkipReplay { .. } => None,
         }
     }
 
@@ -91,6 +97,7 @@ impl Job {
             Self::PersistChunks { chunks, .. } => Some(chunks.clone()),
             Self::DropChunk { chunk, .. } => Some(vec![chunk.chunk_id]),
             Self::WipePreservedCatalog { .. } => None,
+            Self::SkipReplay { .. } => None,
         }
     }
 
@@ -104,6 +111,7 @@ impl Job {
             Self::PersistChunks { .. } => "Persisting chunks to object storage",
             Self::DropChunk { .. } => "Drop chunk from memory and (if persisted) from object store",
             Self::WipePreservedCatalog { .. } => "Wipe preserved catalog",
+            Self::SkipReplay { .. } => "Skip replay",
         }
     }
 }

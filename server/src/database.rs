@@ -60,6 +60,12 @@ pub enum Error {
         db_name: String,
         source: Box<parquet_file::catalog::Error>,
     },
+
+    #[snafu(display("failed to skip replay for database ({}): {}", db_name, source))]
+    SkipReplay {
+        db_name: String,
+        source: Box<InitError>,
+    },
 }
 
 /// A `Database` represents a single configured IOx database - i.e. an entity with a corresponding
@@ -216,6 +222,50 @@ impl Database {
             {
                 let mut state = shared.state.write();
                 *state.unfreeze(handle) = DatabaseState::RulesLoaded(current_state);
+            }
+
+            Ok(())
+        })
+    }
+
+    /// Recover from a ReplayError by skipping replay
+    pub fn skip_replay(&self) -> Result<impl Future<Output = Result<(), Error>>, Error> {
+        let db_name = &self.shared.config.name;
+        let (mut current_state, handle) = {
+            let state = self.shared.state.read();
+            let current_state = match &**state {
+                DatabaseState::ReplayError(rules_loaded, _) => rules_loaded.clone(),
+                _ => {
+                    return Err(Error::InvalidState {
+                        db_name: db_name.to_string(),
+                        state: state.state_code(),
+                        transition: "SkipReplay".to_string(),
+                    })
+                }
+            };
+
+            let handle = state.try_freeze().ok_or(Error::TransitionInProgress {
+                db_name: db_name.to_string(),
+                state: state.state_code(),
+            })?;
+
+            (current_state, handle)
+        };
+
+        let shared = Arc::clone(&self.shared);
+
+        Ok(async move {
+            let db_name = &shared.config.name;
+            current_state.replay_plan = Arc::new(None);
+            let current_state = current_state
+                .advance()
+                .await
+                .map_err(Box::new)
+                .context(SkipReplay { db_name })?;
+
+            {
+                let mut state = shared.state.write();
+                *state.unfreeze(handle) = DatabaseState::Initialized(current_state);
             }
 
             Ok(())
