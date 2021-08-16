@@ -199,12 +199,7 @@ fn decode_b3(
     // TEMPORARY (#2297)
     info!(?ctx, "tracing request");
 
-    Ok(Some(SpanContext {
-        trace_id: required_header(headers, B3_TRACE_ID_HEADER)?,
-        parent_span_id: parsed_header(headers, B3_PARENT_SPAN_ID_HEADER)?,
-        span_id: required_header(headers, B3_SPAN_ID_HEADER)?,
-        collector: Some(Arc::clone(collector)),
-    }))
+    Ok(Some(ctx))
 }
 
 struct JaegerCtx {
