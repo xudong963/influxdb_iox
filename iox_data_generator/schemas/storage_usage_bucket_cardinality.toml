@@ -1,0 +1,76 @@
+name = "storage_usage_bucket_cardinality"
+base_seed = "foo"
+
+[[agents]]
+name = "foo"
+#count = 128
+count = 4
+sampling_interval = 1
+
+[[agents.measurements]]
+name = "storage_usage_bucket_cardinality"
+count = 1
+
+[[agents.measurements.tags]]
+name = "bucket_id"
+# example: "790263f4f4d3a6aa"
+# cardinality = 100
+cardinality = 10
+value = "0123456789abc{{cardinality}}"
+
+[[agents.measurements.tags]]
+name = "env"
+# example: "prod01-eu-central-1"
+# cardinality = 20
+cardinality = 2
+value = "prod01-eu-central-{{cardinality}}"
+
+[[agents.measurements.tags]]
+name = "host"
+# example: "storage-10"
+value = "storage-{{agent_id}}"
+
+[[agents.measurements.tags]]
+name = "hostname"
+# example: "storage-10"
+value = "storage-{{agent_id}}"
+
+[[agents.measurements.tags]]
+name = "node_id"
+# example: "10"
+value = "{{agent_id}}"
+
+[[agents.measurements.tags]]
+name = "nodename"
+# example: "ip-10-153-10-190.eu-central-1.compute.internal"
+cardinality = 2
+value = "ip-10-100-10-{{agent_id}}.eu-central-{{cardinality}}.compute.internal"
+
+[[agents.measurements.tags]]
+name = "org_id"
+# example: "0009b43589fa5019"
+# cardinality = 1000
+cardinality = 10
+value = "0123456789af{{cardinality}}"
+
+[[agents.measurements.tags]]
+name = "partition_id"
+# example: "10"
+# cardinality = 64
+cardinality = 8
+value = "{{cardinality}}"
+
+[[agents.measurements.tags]]
+name = "role"
+# example: "storage"
+value = "storage"
+
+[[agents.measurements.tags]]
+name = "url"
+# example: "http://127.0.0.1:6060/metrics/usage"
+value = "http://127.0.0.1:6060/metrics/usage"
+
+[[agents.measurements.fields]]
+name = "gauge"
+# example: 44
+i64_range = [0, 100]

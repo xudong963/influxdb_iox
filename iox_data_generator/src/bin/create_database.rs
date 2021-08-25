@@ -97,12 +97,13 @@ Examples:
             }],
         }),
         lifecycle_rules: Some(LifecycleRules {
-            buffer_size_soft: 1024 * 1024 * 1024,
-            buffer_size_hard: 1024 * 1024 * 1024 * 2,
+            buffer_size_soft: 10 * 1024 * 1024,
+            buffer_size_hard: 10 * 1024 * 1024 * 2,
             worker_backoff_millis: 100,
             max_active_compactions_cfg: Some(MaxActiveCompactionsCfg::MaxActiveCompactions(1)),
+            late_arrive_window_seconds: 10,
             persist: true,
-            persist_row_threshold: 10 * 1000 * 1000,
+            persist_row_threshold: 1_000_000,
             ..Default::default()
         }),
         worker_cleanup_avg_sleep: None,
