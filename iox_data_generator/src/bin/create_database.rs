@@ -97,12 +97,14 @@ Examples:
             }],
         }),
         lifecycle_rules: Some(LifecycleRules {
-            buffer_size_soft: 10 * 1024 * 1024,
-            buffer_size_hard: 10 * 1024 * 1024 * 2,
+            buffer_size_soft: 100 * 1024 * 1024,
+            buffer_size_hard: 120 * 1024 * 1024,
             worker_backoff_millis: 100,
-            max_active_compactions_cfg: Some(MaxActiveCompactionsCfg::MaxActiveCompactions(1)),
-            late_arrive_window_seconds: 10,
+            max_active_compactions_cfg: Some(MaxActiveCompactionsCfg::MaxActiveCompactions(2)),
+            mub_row_threshold: 100_000,
+            late_arrive_window_seconds: 20,
             persist: true,
+            persist_age_threshold_seconds: 100,
             persist_row_threshold: 1_000_000,
             ..Default::default()
         }),
