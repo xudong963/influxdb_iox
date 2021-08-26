@@ -180,14 +180,16 @@ where
     fn potential_overlap(&self, other: &Self) -> Result<bool> {
         // This algorithm assumes that the keys are sorted by name (so
         // they can't appear in different orders on the two sides)
+        let dbg_self: Vec<_> = self.key_summaries.iter().map(|s| s.name.clone()).collect();
+        let dbg_other: Vec<_> = other.key_summaries.iter().map(|s| s.name.clone()).collect();
         debug_assert!(self
             .key_summaries
             .windows(2)
-            .all(|s| s[0].name <= s[1].name));
+            .all(|s| s[0].name <= s[1].name), "{:?}", dbg_self);
         debug_assert!(other
             .key_summaries
             .windows(2)
-            .all(|s| s[0].name <= s[1].name));
+            .all(|s| s[0].name <= s[1].name), "{:?}", dbg_other);
         self.potential_overlap_impl(0, other, 0)
     }
 

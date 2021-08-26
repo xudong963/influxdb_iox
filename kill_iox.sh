@@ -4,6 +4,8 @@ set -eu -o pipefail
 
 trap '' INT
 
+export RUST_BACKTRACE=1
+
 echo "===== build IOx ====="
 cargo build --no-default-features
 
@@ -34,11 +36,7 @@ readonly PID_ROUTER=$!
 
 echo "===== start query node ====="
 readonly STORE_LOCATION="$(mktemp -d)"
-valgrind \
-    --tool=massif \
-    --detailed-freq=1 \
-    --max-snapshots=100 \
-    ./target/debug/influxdb_iox \
+./target/debug/influxdb_iox \
     run \
     --server-id 2 \
     --api-bind 127.0.0.1:8084 \
