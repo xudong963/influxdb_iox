@@ -2,6 +2,7 @@ use crate::column::cmp::Operator;
 use std::{
     convert::TryFrom,
     fmt::{Debug, Display},
+    num::NonZeroI64,
 };
 
 // A `Transcoder` describes behaviour to encode and decode from one scalar type
@@ -179,11 +180,65 @@ impl Display for FloatByteTrimmer {
 }
 
 //
-// TODO(edd): soon to be adding the following
+// A FrameOfReferenceTranscoder subtracts a reference constant before further
+// dividing an encoded value by a denominator. The resulting encoded values
+// are then byte trimmed.
 //
-//  * FrameOfReferenceTranscoder: a transcoder that will apply a transformation
-//        to logical values and then optionally apply a byte trimming to the
-//        result.
+// For example, given the following input of i64 values:
+//
+//  {10023000, 10044000, 10101000, 10203000}
+//
+// We can first subtract the minimum reference value (10023000) from each value
+// giving us:
+//
+//  {0, 21000, 78000, 180000}
+//
+// Next we can find the greatest common denominator (GCD) and divide each value
+// by that. In this case the GCD is 3,000. So we have:
+//
+// {0, 7, 26, 60}
+//
+// Finally, we can now apply byte trimming (in this case storing each value as
+// a single byte). The overall reduction in this example is from 32b to 4b
+// (excluding the cost of storing the reference and gcd values, which will get
+// amortised over the entire column in practice).
+#[derive(Debug)]
+pub struct FrameOfReferenceTranscoder {
+    reference: i64,  // the reference must be non-negative
+    gcd: NonZeroI64, // the greatest common denominator should be positive
+}
+
+impl FrameOfReferenceTranscoder {
+    pub fn new(reference: i64, gcd: NonZeroI64) -> Self {
+        assert!(reference >= 0);
+        Self { reference, gcd }
+    }
+}
+
+impl Display for FrameOfReferenceTranscoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FOR: [ref: {:?}, gcd: {:?}]", self.reference, self.gcd)
+    }
+}
+
+macro_rules! make_for {
+    ($type_logical:ty, $type_physical:ty) => {
+        impl Transcoder<$type_physical, $type_logical> for FrameOfReferenceTranscoder {
+            fn encode(&self, v: $type_logical) -> $type_physical {
+                let value = (v - self.reference) / self.gcd.get();
+                value as $type_physical
+            }
+
+            fn decode(&self, v: $type_physical) -> $type_logical {
+                v as $type_logical * self.gcd.get() + self.reference
+            }
+        }
+    };
+}
+
+make_for!(i64, u8);
+make_for!(i64, u16);
+make_for!(i64, u32);
 
 #[cfg(test)]
 use std::{sync::atomic, sync::atomic::AtomicUsize, sync::Arc};
