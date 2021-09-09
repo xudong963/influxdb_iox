@@ -25,7 +25,7 @@ use data_types::{
     server_id::ServerId,
 };
 use datafusion::catalog::{catalog::CatalogProvider, schema::SchemaProvider};
-use entry::{Entry, Sequence, SequencedEntry, TableBatch};
+use entry::{distribute_write_entry, Entry, Sequence, SequencedEntry, TableBatch};
 use futures::{stream::BoxStream, StreamExt};
 use internal_types::schema::Schema;
 use iox_object_store::IoxObjectStore;
@@ -1144,11 +1144,21 @@ impl Db {
                 // the write buffer, and it's not an error. We ignore the returned metadata; it
                 // will get picked up when data is read from the write buffer.
 
-                // TODO: be smarter than always using sequencer 0
-                let _ = write_buffer
-                    .store_entry(&entry, 0)
-                    .await
-                    .context(WriteBufferWritingError)?;
+                // split writes into many
+                let sequencer_ids = write_buffer.sequencer_ids();
+                let entries = distribute_write_entry(
+                    &entry,
+                    NonZeroUsize::new(sequencer_ids.len()).expect("No sequencers found?"),
+                );
+                for (entry, sequencer_id) in entries.into_iter().zip(sequencer_ids.into_iter()) {
+                    if let Some(entry) = entry {
+                        write_buffer
+                            .store_entry(&entry, sequencer_id)
+                            .await
+                            .context(WriteBufferWritingError)?;
+                    }
+                }
+
                 Ok(())
             }
             (Some(WriteBufferConfig::Writing(write_buffer)), false) => {
@@ -1699,6 +1709,36 @@ mod tests {
             "Expected Err(Error::WriteBufferWritingError {{ .. }}), got: {:?}",
             res
         );
+    }
+
+    #[tokio::test]
+    async fn write_buffer_distributes_writes() {
+        let write_buffer_state =
+            MockBufferSharedState::empty_with_n_sequencers(NonZeroU32::try_from(10).unwrap());
+        let write_buffer =
+            Arc::new(MockBufferForWriting::new(write_buffer_state.clone(), None).unwrap());
+        let partition_template = PartitionTemplate {
+            parts: vec![TemplatePart::Column("p".to_string())],
+        };
+        let db = TestDb::builder()
+            .write_buffer(WriteBufferConfig::Writing(Arc::clone(&write_buffer) as _))
+            .lifecycle_rules(LifecycleRules {
+                immutable: true,
+                ..Default::default()
+            })
+            .partition_template(partition_template)
+            .build()
+            .await
+            .db;
+
+        for i in 0..100 {
+            let lp = format!("t{},p={} x=1 10", i % 7, i % 5);
+            write_lp(&db, &lp).await;
+        }
+
+        for sequencer_id in 0..10 {
+            assert!(!write_buffer_state.get_messages(sequencer_id).is_empty());
+        }
     }
 
     #[tokio::test]

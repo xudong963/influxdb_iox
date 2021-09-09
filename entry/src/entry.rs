@@ -1,7 +1,13 @@
 //! This module contains helper code for building `Entry` from line protocol and the
 //! `DatabaseRules` configuration.
 
-use std::{collections::BTreeMap, convert::TryFrom, fmt::Formatter};
+use std::{
+    collections::BTreeMap,
+    convert::TryFrom,
+    fmt::Formatter,
+    hash::{Hash, Hasher},
+    num::NonZeroUsize,
+};
 
 use chrono::{DateTime, TimeZone, Utc};
 use flatbuffers::{FlatBufferBuilder, Follow, ForwardsUOffset, Vector, VectorIter, WIPOffset};
@@ -299,6 +305,88 @@ fn build_table_write_batch<'a>(
             columns: Some(columns),
         },
     ))
+}
+
+pub fn distribute_write_entry(entry: &Entry, n: NonZeroUsize) -> Vec<Option<Entry>> {
+    assert_eq!(entry.fb().operation_type(), entry_fb::Operation::write);
+
+    let mut split_fbb: Vec<_> = (0..n.get()).map(|_| FlatBufferBuilder::new()).collect();
+    let mut split_fb_partition_writes: Vec<_> = (0..n.get()).map(|_| vec![]).collect();
+
+    if let Some(partition_writes) = entry.partition_writes() {
+        for partition_write in partition_writes {
+            let mut split_fb_table_batches: Vec<_> = (0..n.get()).map(|_| vec![]).collect();
+
+            // distribute table batches
+            for table_batch in partition_write.table_batches() {
+                let select = hash_table_and_partition(table_batch.name(), partition_write.key(), n);
+
+                let fbb = &mut split_fbb[select];
+                let fb_table_batches = &mut split_fb_table_batches[select];
+
+                let fb_table_batch = table_batch.deep_copy(fbb);
+                fb_table_batches.push(fb_table_batch);
+            }
+
+            // build (up to) `n` partition writes from distributed table batches
+            for (select, fb_table_batches) in split_fb_table_batches.into_iter().enumerate() {
+                if fb_table_batches.is_empty() {
+                    continue;
+                }
+
+                let mut fbb = &mut split_fbb[select];
+
+                let partition_key = fbb.create_string(partition_write.key());
+                let table_batches = fbb.create_vector(&fb_table_batches);
+                let partition_write = entry_fb::PartitionWrite::create(
+                    &mut fbb,
+                    &entry_fb::PartitionWriteArgs {
+                        key: Some(partition_key),
+                        table_batches: Some(table_batches),
+                    },
+                );
+                split_fb_partition_writes[select].push(partition_write);
+            }
+        }
+    }
+
+    split_fbb
+        .into_iter()
+        .zip(split_fb_partition_writes.into_iter())
+        .map(|(mut fbb, fb_partition_writes)| {
+            if fb_partition_writes.is_empty() {
+                None
+            } else {
+                let partition_writes = fbb.create_vector(&fb_partition_writes);
+                let operation = entry_fb::WriteOperations::create(
+                    &mut fbb,
+                    &entry_fb::WriteOperationsArgs {
+                        partition_writes: Some(partition_writes),
+                    },
+                )
+                .as_union_value();
+
+                let entry = entry_fb::Entry::create(
+                    &mut fbb,
+                    &entry_fb::EntryArgs {
+                        operation_type: entry_fb::Operation::write,
+                        operation: Some(operation),
+                    },
+                );
+                fbb.finish(entry, None);
+
+                let (mut data, idx) = fbb.collapse();
+                Some(Entry::try_from(data.split_off(idx)).unwrap())
+            }
+        })
+        .collect()
+}
+
+fn hash_table_and_partition(table_name: &str, partition_key: &str, n: NonZeroUsize) -> usize {
+    let mut hasher = ahash::AHasher::new_with_keys(1815, 1210);
+    table_name.hash(&mut hasher);
+    partition_key.hash(&mut hasher);
+    (hasher.finish() % (n.get() as u64)) as usize
 }
 
 pub fn pb_to_entry(database_batch: &pb::DatabaseBatch) -> Result<Entry> {
@@ -947,6 +1035,21 @@ impl<'a> TableBatch<'a> {
 
         builder.build()
     }
+
+    fn deep_copy<'fbb>(
+        &self,
+        fbb: &mut FlatBufferBuilder<'fbb>,
+    ) -> WIPOffset<entry_fb::TableWriteBatch<'fbb>> {
+        let columns: Vec<_> = self
+            .columns()
+            .into_iter()
+            .map(|column| column.deep_copy(fbb))
+            .collect();
+        let columns = Some(fbb.create_vector(&columns));
+        let name = Some(fbb.create_string(self.name()));
+
+        entry_fb::TableWriteBatch::create(fbb, &entry_fb::TableWriteBatchArgs { name, columns })
+    }
 }
 
 /// Wrapper struct for the flatbuffers Column. Has a convenience method to
@@ -1113,6 +1216,112 @@ impl<'a> Column<'a> {
             entry_fb::ColumnValues::BytesValues => unimplemented!(),
             _ => panic!("unknown fb values type"),
         }
+    }
+
+    fn deep_copy<'fbb>(
+        &self,
+        fbb: &mut FlatBufferBuilder<'fbb>,
+    ) -> WIPOffset<entry_fb::Column<'fbb>> {
+        let name = Some(fbb.create_string(self.name()));
+        let logical_column_type = self.fb.logical_column_type();
+        let values_type = self.fb.values_type();
+        let values = match self.fb.values_type() {
+            entry_fb::ColumnValues::BoolValues => {
+                let values = self
+                    .fb
+                    .values_as_bool_values()
+                    .unwrap()
+                    .values()
+                    .map(|values| fbb.create_vector_direct(values));
+                let values =
+                    entry_fb::BoolValues::create(fbb, &entry_fb::BoolValuesArgs { values });
+                values.as_union_value()
+            }
+            entry_fb::ColumnValues::U64Values => {
+                let values = self
+                    .fb
+                    .values_as_u64values()
+                    .unwrap()
+                    .values()
+                    .map(|values| fbb.create_vector_direct(values.safe_slice()));
+                let values = entry_fb::U64Values::create(fbb, &entry_fb::U64ValuesArgs { values });
+                values.as_union_value()
+            }
+            entry_fb::ColumnValues::I64Values => {
+                let values = self
+                    .fb
+                    .values_as_i64values()
+                    .unwrap()
+                    .values()
+                    .map(|values| fbb.create_vector_direct(values.safe_slice()));
+                let values = entry_fb::I64Values::create(fbb, &entry_fb::I64ValuesArgs { values });
+                values.as_union_value()
+            }
+            entry_fb::ColumnValues::F64Values => {
+                let values = self
+                    .fb
+                    .values_as_f64values()
+                    .unwrap()
+                    .values()
+                    .map(|values| fbb.create_vector_direct(values.safe_slice()));
+                let values = entry_fb::F64Values::create(fbb, &entry_fb::F64ValuesArgs { values });
+                values.as_union_value()
+            }
+            entry_fb::ColumnValues::StringValues => {
+                let values = self
+                    .fb
+                    .values_as_string_values()
+                    .unwrap()
+                    .values()
+                    .map(|values| {
+                        let values: Vec<_> =
+                            values.into_iter().map(|s| fbb.create_string(s)).collect();
+                        fbb.create_vector(&values)
+                    });
+                let values =
+                    entry_fb::StringValues::create(fbb, &entry_fb::StringValuesArgs { values });
+                values.as_union_value()
+            }
+            entry_fb::ColumnValues::BytesValues => {
+                let values = self
+                    .fb
+                    .values_as_bytes_values()
+                    .unwrap()
+                    .values()
+                    .map(|values| {
+                        let values: Vec<_> = values
+                            .into_iter()
+                            .map(|bytes| {
+                                let data = bytes.data().map(|data| fbb.create_vector_direct(data));
+                                entry_fb::BytesValue::create(
+                                    fbb,
+                                    &entry_fb::BytesValueArgs { data },
+                                )
+                            })
+                            .collect();
+                        fbb.create_vector(&values)
+                    });
+                let values =
+                    entry_fb::BytesValues::create(fbb, &entry_fb::BytesValuesArgs { values });
+                values.as_union_value()
+            }
+            _ => panic!("unknown fb values type"),
+        };
+        let null_mask = self
+            .fb
+            .null_mask()
+            .map(|null_mask| fbb.create_vector_direct(null_mask));
+
+        entry_fb::Column::create(
+            fbb,
+            &entry_fb::ColumnArgs {
+                name,
+                logical_column_type,
+                values_type,
+                values: Some(values),
+                null_mask,
+            },
+        )
     }
 }
 
@@ -2811,5 +3020,91 @@ mod tests {
         let entry_cloned_cloned = entry_cloned.clone();
         drop(entry);
         format!("{:?}", entry_cloned_cloned);
+    }
+
+    #[test]
+    fn test_distribute_write_entry_single_line() {
+        let lp = vec!["cpu val=1 55"].join("\n");
+        let lines: Vec<_> = parse_lines(&lp).map(|l| l.unwrap()).collect();
+
+        let sharded_entries = lines_to_sharded_entries(
+            &lines,
+            ARBITRARY_DEFAULT_TIME,
+            NO_SHARD_CONFIG,
+            &partitioner(1),
+        )
+        .unwrap();
+        let entry = &sharded_entries[0].entry;
+        let entries = distribute_write_entry(entry, NonZeroUsize::new(10).unwrap());
+        assert_eq!(entries.len(), 10);
+        assert_eq!(entries.iter().filter(|x| x.is_some()).count(), 1);
+    }
+
+    #[test]
+    fn test_distribute_write_entry_many_lines_single_tablepartition() {
+        let lines: Vec<_> = (0..100).map(|i| format!("cpu val={} {}", i, i)).collect();
+        let lp = lines.join("\n");
+        let lines: Vec<_> = parse_lines(&lp).map(|l| l.unwrap()).collect();
+
+        let sharded_entries = lines_to_sharded_entries(
+            &lines,
+            ARBITRARY_DEFAULT_TIME,
+            NO_SHARD_CONFIG,
+            &partitioner(1),
+        )
+        .unwrap();
+        let entry = &sharded_entries[0].entry;
+        let entries = distribute_write_entry(entry, NonZeroUsize::new(10).unwrap());
+        assert_eq!(entries.len(), 10);
+        assert_eq!(entries.iter().filter(|x| x.is_some()).count(), 1);
+        assert_eq!(total_row_count(&entries), 100);
+    }
+
+    #[test]
+    fn test_distribute_write_entry_many_lines_many_tablepartition() {
+        let lines: Vec<_> = (0..200)
+            .map(|i| {
+                // create the same line twice
+                let i = i / 2;
+                format!("t{} val={} {}", i % 7, i, i)
+            })
+            .collect();
+        let lp = lines.join("\n");
+        let lines: Vec<_> = parse_lines(&lp).map(|l| l.unwrap()).collect();
+
+        let sharded_entries = lines_to_sharded_entries(
+            &lines,
+            ARBITRARY_DEFAULT_TIME,
+            NO_SHARD_CONFIG,
+            &partitioner(5),
+        )
+        .unwrap();
+        let entry = &sharded_entries[0].entry;
+        let entries = distribute_write_entry(entry, NonZeroUsize::new(10).unwrap());
+        assert_eq!(entries.len(), 10);
+        assert_eq!(entries.iter().filter(|x| x.is_some()).count(), 10);
+        assert_eq!(total_row_count(&entries), 200);
+    }
+
+    fn total_row_count(entries: &[Option<Entry>]) -> usize {
+        entries
+            .iter()
+            .filter_map(|x| {
+                x.as_ref().map(|e| {
+                    e.partition_writes().map_or(0, |writes| {
+                        writes
+                            .iter()
+                            .map(|write| {
+                                write
+                                    .table_batches()
+                                    .iter()
+                                    .map(|batch| batch.row_count())
+                                    .sum::<usize>()
+                            })
+                            .sum::<usize>()
+                    })
+                })
+            })
+            .sum::<usize>()
     }
 }
