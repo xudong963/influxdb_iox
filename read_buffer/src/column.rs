@@ -2080,6 +2080,34 @@ mod test {
         assert_eq!(row_ids.unwrap().to_vec(), vec![1]);
 
         row_ids = col.row_ids_filter(
+            &cmp::Operator::Equal,
+            &Value::from(200.1),
+            RowIDs::new_bitmap(),
+        );
+        assert!(matches!(row_ids, RowIDsOption::None(_)));
+
+        row_ids = col.row_ids_filter(
+            &cmp::Operator::NotEqual,
+            &Value::from(200.1),
+            RowIDs::new_bitmap(),
+        );
+        assert!(matches!(row_ids, RowIDsOption::All(_)));
+
+        row_ids = col.row_ids_filter(
+            &cmp::Operator::GT,
+            &Value::from(100.1),
+            RowIDs::new_bitmap(),
+        );
+        assert_eq!(row_ids.unwrap().to_vec(), vec![1, 2]);
+
+        row_ids = col.row_ids_filter(
+            &cmp::Operator::LT,
+            &Value::from(100.1),
+            RowIDs::new_bitmap(),
+        );
+        assert_eq!(row_ids.unwrap().to_vec(), vec![0, 3, 4, 5]);
+
+        row_ids = col.row_ids_filter(
             &cmp::Operator::LT,
             &Value::from(64000.0),
             RowIDs::new_bitmap(),
