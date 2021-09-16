@@ -225,12 +225,24 @@ macro_rules! make_for {
     ($type_logical:ty, $type_physical:ty) => {
         impl Transcoder<$type_physical, $type_logical> for FrameOfReferenceTranscoder {
             fn encode(&self, v: $type_logical) -> $type_physical {
-                let value = (v - self.reference) / self.gcd.get();
+                let delta = v - self.reference;
+                let value = delta / self.gcd.get() as $type_logical;
+                dbg!(&self);
                 value as $type_physical
             }
 
+            fn encode_comparable(
+                &self,
+                v: $type_logical,
+                op: Operator,
+            ) -> Option<($type_physical, Operator)> {
+                None
+
+                // TODO EDD - figure out next valid value for any given value
+            }
+
             fn decode(&self, v: $type_physical) -> $type_logical {
-                v as $type_logical * self.gcd.get() + self.reference
+                dbg!(dbg!(v as $type_logical) * dbg!(self.gcd.get()) + dbg!(self.reference))
             }
         }
     };

@@ -1,5 +1,6 @@
 use std::fmt::Display;
 use std::mem::size_of;
+use std::num::NonZeroI64;
 
 use arrow::array::{Array, PrimitiveArray};
 use arrow::{self, datatypes::*};
@@ -12,6 +13,7 @@ use super::encoding::scalar::{
 };
 use super::encoding::{scalar::rle, scalar::Fixed, scalar::FixedNull};
 use super::{cmp, Statistics};
+use crate::benchmarks::FrameOfReferenceTranscoder;
 use crate::column::{RowIDs, Scalar, Value, Values};
 
 /// A representation of a column encoding for integer data, providing an
@@ -270,6 +272,76 @@ fn should_rle_from_iter<T: PartialOrd>(len: usize, iter: impl Iterator<Item = Op
         >= MIN_RLE_SIZE_REDUCTION
 }
 
+// Calculates the greatest common denominator/divisor (GCD) from the input. The
+// GCD can be calculated iteratively from an arbitrary number of elements. This
+// is done by determining the GCD of a running GCD and the next input value.
+fn gcd(mut itr: impl Iterator<Item = i64>) -> NonZeroI64 {
+    let first = itr.next().expect("called with empty iterator");
+
+    let mut gcd = match itr.next() {
+        Some(v) => num::integer::gcd(first, v),
+        None => return NonZeroI64::new(first).unwrap(),
+    };
+
+    for v in itr {
+        gcd = num::integer::gcd(gcd, v);
+        if gcd == 1 {
+            break; // no point iterating further
+        }
+    }
+
+    NonZeroI64::new(gcd).unwrap()
+}
+
+// Tracks the appropriate byte trimming that should be applied to values encoded
+// with the Frame of Reference / GCD transcoder.
+enum FORGCDType {
+    U32(FrameOfReferenceTranscoder),
+    U16(FrameOfReferenceTranscoder),
+    U8(FrameOfReferenceTranscoder),
+    None,
+}
+
+// Applies a heuristic to decide whether the input data should be encoded using
+// a combination ofr Frame of Reference and GCD transformation, followed by byte
+// trimming. This encoding will be used if it is possible to trim values down
+// from 64-bits to a smaller representation.
+fn should_for_trim_from_iter(itr: impl Iterator<Item = i64>, min: i64, max: i64) -> FORGCDType {
+    if min < 0 {
+        // Cannot apply this encoding to negative values
+        return FORGCDType::None;
+    }
+
+    // Firstly determine the GCD of the input.
+    let g = gcd(itr);
+
+    // Determine the largest encoded delta after min removed.
+    let largest_delta = max - min;
+
+    let encoded = largest_delta / g.get();
+    match encoded {
+        x if x <= u8::MAX as i64 => {
+            if max <= u8::MAX as i64 {
+                return FORGCDType::None; // should just plain byte trim
+            }
+            FORGCDType::U8(FrameOfReferenceTranscoder::new(min, g))
+        }
+        x if x <= u16::MAX as i64 => {
+            if max <= u16::MAX as i64 {
+                return FORGCDType::None; // should just plain byte trim
+            }
+            FORGCDType::U16(FrameOfReferenceTranscoder::new(min, g))
+        }
+        x if x <= u32::MAX as i64 => {
+            if max <= u32::MAX as i64 {
+                return FORGCDType::None; // should just plain byte trim
+            }
+            FORGCDType::U32(FrameOfReferenceTranscoder::new(min, g))
+        }
+        _ => FORGCDType::None,
+    }
+}
+
 /// Converts a slice of i64 values into an IntegerEncoding.
 ///
 /// The most compact physical type needed to store the columnar values is
@@ -290,6 +362,42 @@ impl From<&[i64]> for IntegerEncoding {
 
         // If true then use RLE after byte trimming.
         let rle = should_rle_from(arr);
+
+        // check if Frame of Reference/GCD (FORGCD) encoding is appropriate
+        // (typically for timestamps). RLE is likely preferable so only consider
+        // FORGCD if RLE isn't appropriate.
+        if !rle {
+            match should_for_trim_from_iter(arr.iter().cloned(), min, max) {
+                FORGCDType::U32(transcoder) => {
+                    let arr = arr
+                        .iter()
+                        .map::<u32, _>(|v| transcoder.encode(*v))
+                        .collect::<Vec<_>>();
+                    let enc = Box::new(Fixed::new(arr, transcoder));
+                    let name = enc.name();
+                    return Self::I64(enc, format!("FORGCD_BT_U32-{}", name));
+                }
+                FORGCDType::U16(transcoder) => {
+                    let arr = arr
+                        .iter()
+                        .map::<u16, _>(|v| transcoder.encode(*v))
+                        .collect::<Vec<_>>();
+                    let enc = Box::new(Fixed::new(arr, transcoder));
+                    let name = enc.name();
+                    return Self::I64(enc, format!("FORGCD_BT_U16-{}", name));
+                }
+                FORGCDType::U8(transcoder) => {
+                    let arr = arr
+                        .iter()
+                        .map::<u8, _>(|v| transcoder.encode(*v))
+                        .collect::<Vec<_>>();
+                    let enc = Box::new(Fixed::new(arr, transcoder));
+                    let name = enc.name();
+                    return Self::I64(enc, format!("FORGCD_BT_U8-{}", name));
+                }
+                FORGCDType::None => {}
+            }
+        }
 
         // This match is carefully ordered. It prioritises smaller physical
         // datatypes that can safely represent the provided logical data
@@ -777,8 +885,10 @@ mod test {
                     .into_iter()
                     .interleave(vec![600_i64; 1000].into_iter())
                     .collect::<Vec<i64>>(),
-                // byte trimmed to u16
-                "BT_U16-FIXED",
+                // Remove 500 from each value produces a series of 0, 100, 0, 100...
+                // Use a GCD of 100 as a divisor, which produces a series of 0, 1, 0, 1, 0, 1....
+                // Store as a vector of single byte values.
+                "FORGCD_BT_U8-FIXED",
             ),
             (
                 vec![500_i64; 1000]
@@ -809,8 +919,10 @@ mod test {
                     .into_iter()
                     .interleave(vec![200_000_i64; 1000].into_iter())
                     .collect::<Vec<i64>>(),
-                // byte trimmed to u32
-                "BT_U32-FIXED",
+                // Remove 100,000 from each value produces a series of 0, 100000, 0, 100000...
+                // Use a GCD of 100000 as a divisor, which produces a series of 0, 1, 0, 1, 0, 1....
+                // Store as a vector of single byte values.
+                "FORGCD_BT_U8-FIXED",
             ),
             (
                 vec![100_000_i64; 1000]
@@ -1038,11 +1150,13 @@ mod test {
                 Int64Array::from(
                     vec![500_i64; 1000]
                         .into_iter()
-                        .interleave(vec![600_i64; 1000].into_iter())
+                        .interleave(vec![600_i64; 1000].into_iter()) // 500, 600, 500, 600 ....
                         .collect::<Vec<i64>>(),
                 ),
-                // byte trimmed to u16
-                "BT_U16-FIXED",
+                // Remove 500 from each value produces a series of 0, 100, 0, 100...
+                // Use a GCD of 100 as a divisor, which produces a series of 0, 1, 0, 1, 0, 1....
+                // Store as a vector of single byte values.
+                "FORGCD_BT_U8-FIXED",
             ),
             (
                 Int64Array::from(
@@ -1081,8 +1195,10 @@ mod test {
                         .interleave(vec![200_000_i64; 1000].into_iter())
                         .collect::<Vec<i64>>(),
                 ),
-                // byte trimmed to u32
-                "BT_U32-FIXED",
+                // Remove 100,000 from each value produces a series of 0, 100000, 0, 100000...
+                // Use a GCD of 100000 as a divisor, which produces a series of 0, 1, 0, 1, 0, 1....
+                // Store as a vector of single byte values.
+                "FORGCD_BT_U8-FIXED",
             ),
             (
                 Int64Array::from(
@@ -1274,5 +1390,22 @@ mod test {
         let arr = UInt64Array::from(vec![None; 1000].into_iter().collect::<Vec<Option<u64>>>());
         let enc = IntegerEncoding::from(arr);
         assert_eq!(enc.name(), "BT_U8-RLE", "failed: {:?}", enc);
+    }
+
+    #[test]
+    fn gcd() {
+        let cases = vec![
+            (vec![1, 1], 1),
+            (vec![100, 200, 300, 400, 100], 100),
+            (vec![400, 100], 100),
+            (vec![400, 100, 110], 10),
+            (vec![400, 100, 110, 105], 5),
+            (vec![400, 101, 110, 105], 1),
+            (vec![3374], 3374),
+        ];
+
+        for (input, exp) in cases {
+            assert_eq!(super::gcd(input.into_iter()), NonZeroI64::new(exp).unwrap());
+        }
     }
 }

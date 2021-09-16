@@ -3355,6 +3355,7 @@ dependencies = [
  "internal_types",
  "itertools",
  "metric",
+ "num 0.4.0",
  "observability_deps",
  "packers",
  "parking_lot",

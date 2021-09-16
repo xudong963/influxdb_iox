@@ -433,6 +433,7 @@ impl Column {
     ) -> RowIDsOption {
         let l = self.evaluate_predicate_on_meta(&low.0, &low.1);
         let h = self.evaluate_predicate_on_meta(&high.0, &high.1);
+        dbg!((&l, &h));
         match (l, h) {
             (PredicateMatch::All, PredicateMatch::All) => return RowIDsOption::All(dst),
 
