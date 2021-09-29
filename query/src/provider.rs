@@ -1001,7 +1001,7 @@ mod test {
     use std::num::NonZeroU64;
 
     use arrow::datatypes::DataType;
-    use arrow_util::assert_batches_eq;
+    use arrow_util::{assert_batches_eq, assert_batches_sorted_eq};
     use datafusion::physical_plan::collect;
     use internal_types::schema::{builder::SchemaBuilder, TIME_COLUMN_NAME};
 
@@ -2193,7 +2193,7 @@ mod test {
             "| 50        | VT   | 1970-01-01T00:00:00.000210Z    |",
             "+-----------+------+--------------------------------+",
         ];
-        assert_batches_eq!(&expected, &raw_data(&chunks).await);
+        assert_batches_sorted_eq!(&expected, &raw_data(&chunks).await);
 
         // Create scan plan whose output data is only partially sorted
         let mut deduplicator = Deduplicater::new();
@@ -2229,7 +2229,7 @@ mod test {
             "| 10        | MT   | 1970-01-01T00:00:00.000007Z    |",
             "+-----------+------+--------------------------------+",
         ];
-        assert_batches_eq!(&expected, &batch);
+        assert_batches_sorted_eq!(&expected, &batch);
     }
 
     #[tokio::test]
