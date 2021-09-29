@@ -1,15 +1,10 @@
 //! Implementation of a DataFusion PhysicalPlan node across partition chunks
 
-use std::{fmt, sync::Arc};
+use std::{fmt, sync::Arc, task::{Context, Poll}};
 
-use arrow::datatypes::SchemaRef;
-use datafusion::{
-    error::DataFusionError,
-    physical_plan::{
-        metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
-    },
-};
+use arrow::{datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch};
+use datafusion::{error::DataFusionError, physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet}}};
+use futures::{Stream, StreamExt};
 use internal_types::{schema::Schema, selection::Selection};
 
 use crate::QueryChunk;
@@ -132,10 +127,28 @@ impl<C: QueryChunk + 'static> ExecutionPlan for IOxReadFilterNode<C> {
         // all CPU time is now done, pass in baseline metrics to adapter
         timer.done();
 
-        let adapter = SchemaAdapterStream::try_new(stream, schema, baseline_metrics)
+        let adapter = SchemaAdapterStream::try_new(stream, Arc::clone(&schema), baseline_metrics)
             .map_err(|e| DataFusionError::Internal(e.to_string()))?;
 
-        Ok(Box::pin(adapter))
+        let mut adapter = Box::pin(adapter);
+
+        // HACK: break all record batches into single row (to produce multiple record batches)
+        let mut batches = vec![];
+        while let Some(batch) = adapter.next().await {
+            match batch {
+                Err(_) => batches.push(batch),
+                Ok(batch) => {
+                    println!("Got next batch of {} records", batch.num_rows());
+                    for i in 0..batch.num_rows() {
+                        // slice into 1 row record batches
+                        batches.push(Ok(batch.slice(i, 1)));
+                    }
+                }
+            }
+        }
+        println!("Created output of {} results", batches.len());
+
+        Ok(Box::pin(MemoryStream { batches , schema }))
     }
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -185,4 +198,43 @@ fn restrict_selection<'a>(
         .into_iter()
         .filter(|col| arrow_schema.fields().iter().any(|f| f.name() == col))
         .collect()
+}
+
+
+
+
+
+/// Iterator over batches
+pub(crate) struct MemoryStream {
+    /// Vector of record batches
+    batches: Vec<ArrowResult<RecordBatch>>,
+    /// Schema representing the data
+    schema: SchemaRef,
+}
+
+impl Stream for MemoryStream {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let next_batch = if !self.batches.is_empty() {
+            Some(self.batches.remove(0))
+        } else {
+            None
+        };
+        Poll::Ready(next_batch)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.batches.len(), Some(self.batches.len()))
+    }
+}
+
+impl RecordBatchStream for MemoryStream {
+    /// Get the schema
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
 }
