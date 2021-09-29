@@ -994,6 +994,8 @@ async fn sql_select_with_two_deletes_from_multi_exprs() {
 
 #[tokio::test]
 async fn sql_select_with_two_deletes_from_multi_exprs_with_select_predicate() {
+    test_helpers::maybe_start_logging();
+
     // no extra eliminated
     let expected = vec![
         "+-----+-----+--------------------------------+",
@@ -1002,6 +1004,14 @@ async fn sql_select_with_two_deletes_from_multi_exprs_with_select_predicate() {
         "| 1   | me  | 1970-01-01T00:00:00.000000040Z |",
         "+-----+-----+--------------------------------+",
     ];
+
+    // run_sql_test_case(
+    //     scenarios::delete::TwoDeletesMultiExprsOneChunk {},
+    //     "SELECT * from cpu where time > 30",
+    //     &expected,
+    // )
+    // .await;
+
 
     run_sql_test_case(
         scenarios::delete::TwoDeletesMultiExprsOneChunk {},
