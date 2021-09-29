@@ -2047,29 +2047,29 @@ mod tests {
         let db = Arc::new(test_db.db);
 
         // Chunk 0 has bar:[1-2]
-        write_lp(db.as_ref(), "cpu bar=1 10");
-        write_lp(db.as_ref(), "cpu bar=2 20");
+        write_lp(db.as_ref(), "cpu bar=1 10").await;
+        write_lp(db.as_ref(), "cpu bar=2 20").await;
 
         let partition_key = "1970-01-01T00";
         let mb_chunk = db
-            .rollover_partition(partition_key, "cpu")
+            .rollover_partition("cpu", partition_key)
             .await
             .unwrap()
             .unwrap();
-        db.load_chunk_to_read_buffer(partition_key, "cpu", mb_chunk.id(), &Default::default())
+        db.move_chunk_to_read_buffer("cpu", partition_key, mb_chunk.id())
             .await
             .unwrap();
 
         // Chunk 1 has bar:[3-3] (going to get pruned)
-        write_lp(db.as_ref(), "cpu bar=3 10");
+        write_lp(db.as_ref(), "cpu bar=3 10").await;
 
         let partition_key = "1970-01-01T00";
         let mb_chunk = db
-            .rollover_partition(partition_key, "cpu")
+            .rollover_partition("cpu", partition_key)
             .await
             .unwrap()
             .unwrap();
-        db.load_chunk_to_read_buffer(partition_key, "cpu", mb_chunk.id(), &Default::default())
+        db.move_chunk_to_read_buffer("cpu", partition_key, mb_chunk.id())
             .await
             .unwrap();
 
@@ -2112,7 +2112,6 @@ mod tests {
         let batches = run_query(Arc::clone(&db), "select * from cpu where bar < 3").await;
         assert_batches_sorted_eq!(&expected, &batches); // <-- This assertion fails
     }
-
 
     #[tokio::test]
     async fn load_to_read_buffer_sorted() {
