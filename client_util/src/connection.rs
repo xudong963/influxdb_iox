@@ -1,10 +1,12 @@
 use crate::tower::{SetRequestHeadersLayer, SetRequestHeadersService};
 use http::header::HeaderName;
 use http::{uri::InvalidUri, HeaderValue, Uri};
+#[cfg(feature = "socks5")]
+use hyper_socks2::SocksConnector;
 use std::convert::TryInto;
 use std::time::Duration;
 use thiserror::Error;
-use tonic::transport::Endpoint;
+use tonic::transport::{Channel, Endpoint};
 
 /// The connection type used for clients
 pub type Connection = SetRequestHeadersService<tonic::transport::Channel>;
@@ -86,6 +88,32 @@ impl std::default::Default for Builder {
     }
 }
 
+#[cfg(not(feature = "socks5"))]
+async fn connect(endpoint: Endpoint) -> Result<Channel> {
+    Ok(endpoint.connect().await?)
+}
+
+#[cfg(feature = "socks5")]
+async fn connect(endpoint: Endpoint) -> Result<Channel> {
+    use std::str::FromStr;
+
+    Ok(match std::env::var("ALL_PROXY").ok() {
+        None => endpoint.connect().await?,
+        Some(proxy_url) => {
+            let mut connector = hyper::client::HttpConnector::new();
+            connector.enforce_http(false);
+            connector.set_nodelay(true); // default for Endpoint::from
+            let proxy = SocksConnector {
+                proxy_addr: Uri::from_str(&proxy_url)?,
+                auth: None,
+                connector,
+            };
+
+            endpoint.connect_with_connector(proxy).await?
+        }
+    })
+}
+
 impl Builder {
     /// Construct the [`Connection`] instance using the specified base URL.
     pub async fn build<D>(self, dst: D) -> Result<Connection>
@@ -97,7 +125,7 @@ impl Builder {
             .connect_timeout(self.connect_timeout)
             .timeout(self.timeout);
 
-        let channel = endpoint.connect().await?;
+        let channel = connect(endpoint).await?;
 
         // Compose channel with new tower middleware stack
         let channel = tower::ServiceBuilder::new()

@@ -7,6 +7,7 @@ edition = "2018"
 [features]
 flight = ["arrow", "arrow-flight", "arrow_util", "serde/derive", "serde_json", "futures-util"]
 format = ["arrow"]
+socks5 = [ "client_util/socks5" ]
 
 [dependencies]
 # Workspace dependencies, in alphabetical order

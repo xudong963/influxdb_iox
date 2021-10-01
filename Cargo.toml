@@ -195,3 +195,4 @@ aws = ["object_store/aws"] # Optional AWS / S3 object store support
 # to pick either heappy or jemalloc_replacing_malloc feature at least until we figure out something better.
 jemalloc_replacing_malloc = ["tikv-jemalloc-sys"]
 
+socks5 = [ "influxdb_iox_client/socks5" ]
