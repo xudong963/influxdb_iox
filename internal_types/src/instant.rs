@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
-use once_cell::sync::OnceCell;
+use once_cell::race::OnceBox;
 use std::time::Instant;
 
 /// Stores an Instant and DateTime<Utc> captured as close as possible together
-static INSTANCE: OnceCell<(DateTime<Utc>, Instant)> = OnceCell::new();
+static INSTANCE: OnceBox<(DateTime<Utc>, Instant)> = OnceBox::new();
 
 /// Provides a conversion from Instant to DateTime<Utc> for display purposes
 ///
@@ -13,10 +13,9 @@ static INSTANCE: OnceCell<(DateTime<Utc>, Instant)> = OnceCell::new();
 /// The conversion does, however, preserve the monotonic property of Instant, i.e. a larger
 /// Instant will have a larger returned DateTime.
 ///
-/// This should ONLY be used for display purposes, the results should not be used to
-/// drive logic, nor persisted
+/// This should ONLY be used for display purposes, the results should not be used to drive logic
 pub fn to_approximate_datetime(instant: Instant) -> DateTime<Utc> {
-    let (ref_date, ref_instant) = *INSTANCE.get_or_init(|| (Utc::now(), Instant::now()));
+    let (ref_date, ref_instant) = *INSTANCE.get_or_init(|| Box::new((Utc::now(), Instant::now())));
 
     if ref_instant > instant {
         ref_date

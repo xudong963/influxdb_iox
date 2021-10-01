@@ -8,11 +8,10 @@ use data_types::{
         ChunkAddr, ChunkColumnSummary, ChunkId, ChunkLifecycleAction, ChunkOrder, ChunkStorage,
         ChunkSummary, DetailedChunkSummary,
     },
-    instant::to_approximate_datetime,
     partition_metadata::TableSummary,
     write_summary::TimestampSummary,
 };
-use internal_types::{access::AccessRecorder, schema::Schema};
+use internal_types::{access::AccessRecorder, instant::to_approximate_datetime, schema::Schema};
 use mutable_buffer::chunk::{snapshot::ChunkSnapshot as MBChunkSnapshot, MBChunk};
 use observability_deps::tracing::debug;
 use parquet_file::chunk::ParquetChunk;

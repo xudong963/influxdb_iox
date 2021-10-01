@@ -15,7 +15,7 @@ use internal_types::freezable::{Freezable, FreezeHandle};
 
 use crate::min_max_sequence::MinMaxSequence;
 use crate::{checkpoint::PartitionCheckpoint, min_max_sequence::OptionalMinMaxSequence};
-use data_types::instant::to_approximate_datetime;
+use internal_types::instant::to_approximate_datetime;
 
 const DEFAULT_CLOSED_WINDOW_PERIOD: Duration = Duration::from_secs(30);
 

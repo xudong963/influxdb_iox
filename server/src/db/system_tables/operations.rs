@@ -4,7 +4,7 @@ use arrow::array::{ArrayRef, StringArray, Time64NanosecondArray, TimestampNanose
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::error::Result;
 use arrow::record_batch::RecordBatch;
-use data_types::instant::to_approximate_datetime;
+use internal_types::instant::to_approximate_datetime;
 use itertools::Itertools;
 
 use data_types::error::ErrorLogger;

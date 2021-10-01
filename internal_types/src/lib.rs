@@ -9,6 +9,7 @@
 pub mod access;
 pub mod atomic_instant;
 pub mod freezable;
+pub mod instant;
 pub mod once;
 pub mod schema;
 pub mod selection;
