@@ -6,13 +6,13 @@ pub mod protobuf {
 }
 
 pub mod rpc {
-    include!(concat!(env!("OUT_DIR"), "/google.rpc.rs"));
-    include!(concat!(env!("OUT_DIR"), "/google.rpc.serde.rs"));
+    include!("generated/google.rpc.rs");
+    include!("generated/google.rpc.serde.rs");
 }
 
 pub mod longrunning {
-    include!(concat!(env!("OUT_DIR"), "/google.longrunning.rs"));
-    include!(concat!(env!("OUT_DIR"), "/google.longrunning.serde.rs"));
+    include!("generated/google.longrunning.rs");
+    include!("generated/google.longrunning.serde.rs");
 
     use crate::google::{FieldViolation, FieldViolationExt};
     use crate::influxdata::iox::management::v1::{OperationMetadata, OPERATION_METADATA};

@@ -1,15 +1,33 @@
 //! Compiles Protocol Buffers into native Rust types.
 
-use std::env;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::ffi::OsStr;
 
 type Error = Box<dyn std::error::Error>;
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 fn main() -> Result<()> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("protos");
+    // Ignores all args and finds relative paths based on PWD and the command
 
-    generate_grpc_types(&root)?;
+    // example: generated_types/generate/target/debug/generate
+    let current_exe = std::env::current_exe()?;
+
+    // walk up parent tree looking for generated types
+    let mut generated_types = current_exe.clone();
+    let needle = OsStr::new("generated_types");
+    loop {
+        if generated_types.file_name() == Some(&needle) {
+            break
+        }
+        if !generated_types.pop() {
+            panic!("Can not find 'generated_types' in the path: {:?}", current_exe);
+        }
+    }
+
+    let root = generated_types.join("protos");
+    let out_dir = generated_types.join("src").join("generated");
+
+    generate_grpc_types(&root, &out_dir)?;
 
     Ok(())
 }
@@ -23,7 +41,7 @@ fn main() -> Result<()> {
 /// - `influxdata.iox.management.v1.rs`
 /// - `influxdata.iox.write.v1.rs`
 /// - `influxdata.platform.storage.rs`
-fn generate_grpc_types(root: &Path) -> Result<()> {
+fn generate_grpc_types(root: &Path, out_dir: &Path) -> Result<()> {
     let storage_path = root.join("influxdata/platform/storage");
     let idpe_path = root.join("com/github/influxdata/idpe/storage/read");
     let catalog_path = root.join("influxdata/iox/catalog/v1");
@@ -53,15 +71,9 @@ fn generate_grpc_types(root: &Path) -> Result<()> {
         root.join("google/rpc/error_details.proto"),
         root.join("google/rpc/status.proto"),
     ];
-
-    // Tell cargo to recompile if any of these proto files are changed
-    for proto_file in &proto_files {
-        println!("cargo:rerun-if-changed={}", proto_file.display());
-    }
-
     let mut config = prost_build::Config::new();
-
     config
+        .out_dir(out_dir)
         .compile_well_known_types()
         .disable_comments(&[".google"])
         .extern_path(".google.protobuf", "::pbjson_types")
@@ -71,8 +83,9 @@ fn generate_grpc_types(root: &Path) -> Result<()> {
             ".influxdata.iox.catalog.v1.PartitionCheckpoint.sequencer_numbers",
         ]);
 
-    let descriptor_path = PathBuf::from(env::var("OUT_DIR").unwrap()).join("proto_descriptor.bin");
+    let descriptor_path = out_dir.join("proto_descriptor.bin");
     tonic_build::configure()
+        .out_dir(out_dir)
         .file_descriptor_set_path(&descriptor_path)
         .format(true)
         .compile_with_config(config, &proto_files, &[root.into()])?;
@@ -80,8 +93,11 @@ fn generate_grpc_types(root: &Path) -> Result<()> {
     let descriptor_set = std::fs::read(descriptor_path)?;
 
     pbjson_build::Builder::new()
+        .out_dir(out_dir)
         .register_descriptors(&descriptor_set)?
         .build(&[".influxdata", ".google.longrunning", ".google.rpc"])?;
+
+    println!("Protobuf files written to: {:?}", out_dir);
 
     Ok(())
 }

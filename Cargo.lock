@@ -1262,16 +1262,12 @@ dependencies = [
  "num_cpus",
  "observability_deps",
  "pbjson",
- "pbjson-build",
  "pbjson-types",
- "proc-macro2",
  "prost",
- "prost-build",
  "regex",
  "serde",
  "thiserror",
  "tonic",
- "tonic-build",
 ]
 
 [[package]]

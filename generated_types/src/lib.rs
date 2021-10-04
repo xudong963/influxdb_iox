@@ -9,11 +9,8 @@
 pub mod influxdata {
     pub mod platform {
         pub mod storage {
-            include!(concat!(env!("OUT_DIR"), "/influxdata.platform.storage.rs"));
-            include!(concat!(
-                env!("OUT_DIR"),
-                "/influxdata.platform.storage.serde.rs"
-            ));
+            include!("generated/influxdata.platform.storage.rs");
+            include!("generated/influxdata.platform.storage.serde.rs");
 
             // Can't implement `Default` because `prost::Message` implements `Default`
             impl TimestampRange {
@@ -30,11 +27,8 @@ pub mod influxdata {
     pub mod iox {
         pub mod catalog {
             pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/influxdata.iox.catalog.v1.rs"));
-                include!(concat!(
-                    env!("OUT_DIR"),
-                    "/influxdata.iox.catalog.v1.serde.rs"
-                ));
+                include!("generated/influxdata.iox.catalog.v1.rs");
+                include!("generated/influxdata.iox.catalog.v1.serde.rs");
             }
         }
 
@@ -44,29 +38,23 @@ pub mod influxdata {
                 pub const OPERATION_METADATA: &str =
                     "influxdata.iox.management.v1.OperationMetadata";
 
-                include!(concat!(env!("OUT_DIR"), "/influxdata.iox.management.v1.rs"));
-                include!(concat!(
-                    env!("OUT_DIR"),
-                    "/influxdata.iox.management.v1.serde.rs"
-                ));
+                include!("generated/influxdata.iox.management.v1.rs");
+                include!("generated/influxdata.iox.management.v1.serde.rs");
             }
         }
 
         pub mod write {
             pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/influxdata.iox.write.v1.rs"));
-                include!(concat!(
-                    env!("OUT_DIR"),
-                    "/influxdata.iox.write.v1.serde.rs"
-                ));
+                include!("generated/influxdata.iox.write.v1.rs");
+                include!("generated/influxdata.iox.write.v1.serde.rs");
             }
         }
     }
 
     pub mod pbdata {
         pub mod v1 {
-            include!(concat!(env!("OUT_DIR"), "/influxdata.pbdata.v1.rs"));
-            include!(concat!(env!("OUT_DIR"), "/influxdata.pbdata.v1.serde.rs"));
+            include!("generated/influxdata.pbdata.v1.rs");
+            include!("generated/influxdata.pbdata.v1.serde.rs");
         }
     }
 }
@@ -77,10 +65,7 @@ pub mod com {
             pub mod idpe {
                 pub mod storage {
                     pub mod read {
-                        include!(concat!(
-                            env!("OUT_DIR"),
-                            "/com.github.influxdata.idpe.storage.read.rs"
-                        ));
+                        include!("generated/com.github.influxdata.idpe.storage.read.rs");
                     }
                 }
             }
@@ -92,7 +77,7 @@ pub mod com {
 pub mod grpc {
     pub mod health {
         pub mod v1 {
-            include!(concat!(env!("OUT_DIR"), "/grpc.health.v1.rs"));
+            include!("generated/grpc.health.v1.rs");
         }
     }
 }
@@ -115,7 +100,7 @@ pub fn protobuf_type_url(protobuf_type: &str) -> String {
 
 /// Protobuf file descriptor containing all generated types.
 /// Useful in gRPC reflection.
-pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("proto_descriptor");
+pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("generated/proto_descriptor.bin");
 
 /// Compares the protobuf type URL found within a google.protobuf.Any
 /// message to an expected Protobuf package and message name

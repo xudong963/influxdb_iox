@@ -1,0 +1,17 @@
+[package]
+name = "generate"
+description = "Builder for protobuf generated code"
+version = "0.1.0"
+authors = ["Andrew Lamb <andrew@nerdnetworks.org>"]
+edition = "2018"
+
+[dependencies] # In alphabetical order
+# Pin specific version of the tonic-build dependencies to match arrow
+proc-macro2 = "=1.0.27"
+tonic-build = "0.5"
+prost-build = "0.8"
+#pbjson-build = "0.1"
+pbjson-build = { git = "https://github.com/alamb/pbjson.git", branch="alamb/out_dir" }
+
+# Note this is a standalone binary and not part of the overall workspace
+[workspace]
