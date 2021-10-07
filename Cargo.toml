@@ -63,6 +63,7 @@ members = [
     "read_buffer",
     "server",
     "server_benchmarks",
+    "smallset",
     "test_helpers",
     "trace",
     "trace_exporters",
