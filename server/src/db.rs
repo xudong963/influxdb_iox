@@ -306,7 +306,8 @@ pub struct Db {
     now_override: Mutex<Option<DateTime<Utc>>>,
 
     /// To-be-written delete predicates.
-    delete_predicates_mailbox: Mutex<Vec<(Arc<DeletePredicate>, Vec<ChunkAddrWithoutDatabase>)>>,
+    delete_predicates_mailbox:
+        Mutex<HashMap<Arc<DeletePredicate>, HashSet<ChunkAddrWithoutDatabase>>>,
 
     /// TESTING ONLY: Override of IDs for persisted chunks.
     persisted_chunk_id_override: Mutex<Option<ChunkId>>,
@@ -598,7 +599,10 @@ impl Db {
 
         if !affected_persisted_chunks.is_empty() {
             let mut guard = self.delete_predicates_mailbox.lock();
-            guard.push((delete_predicate, affected_persisted_chunks));
+            guard
+                .entry(delete_predicate)
+                .and_modify(|chunks| chunks.extend(affected_persisted_chunks.iter().cloned()))
+                .or_insert_with(|| affected_persisted_chunks.into_iter().collect());
         }
 
         Ok(())
@@ -890,16 +894,41 @@ impl Db {
             loop {
                 let todo: Vec<_> = {
                     let guard = self.delete_predicates_mailbox.lock();
-                    guard.clone()
+                    guard
+                        .iter()
+                        .map(|(predicate, chunks)| {
+                            let mut chunks: Vec<_> = chunks.iter().cloned().collect();
+                            chunks.sort();
+                            (Arc::clone(predicate), chunks)
+                        })
+                        .collect()
                 };
 
                 if !todo.is_empty() {
                     match self.preserve_delete_predicates(&todo).await {
                         Ok(()) => {
+                            // removed preserved predicates from mailbox
                             let mut guard = self.delete_predicates_mailbox.lock();
-                            // TODO: we could also run a de-duplication here once
-                            // https://github.com/influxdata/influxdb_iox/issues/2626 is implemented
-                            guard.drain(0..todo.len());
+                            for (predicate, chunks) in todo {
+                                match guard.entry(predicate) {
+                                    std::collections::hash_map::Entry::Occupied(mut o) => {
+                                        let chunks_mailbox = o.get_mut();
+                                        for chunk in chunks {
+                                            let removed = chunks_mailbox.remove(&chunk);
+                                            assert!(
+                                                removed,
+                                                "Who removed the chunk from the predicate?! Are there two background workers running?",
+                                            );
+                                        }
+                                        if chunks_mailbox.is_empty() {
+                                            o.remove();
+                                        }
+                                    }
+                                    std::collections::hash_map::Entry::Vacant(_) => {
+                                        panic!("Who removed the predicate that we just preserved?! Are there two background workers running?")
+                                    }
+                                }
+                            }
                         }
                         Err(e) => {
                             error!(%e, "cannot preserve delete predicates");

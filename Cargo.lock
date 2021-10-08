@@ -3848,6 +3848,7 @@ dependencies = [
  "read_buffer",
  "serde",
  "serde_json",
+ "smallset",
  "snafu",
  "snap",
  "test_helpers",

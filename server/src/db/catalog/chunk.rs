@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use smallset::SmallSet;
 use snafu::Snafu;
 
 use data_types::{
@@ -79,7 +80,7 @@ pub struct ChunkMetadata {
     pub schema: Arc<Schema>,
 
     /// Delete predicates of this chunk
-    pub delete_predicates: Vec<Arc<DeletePredicate>>,
+    pub delete_predicates: SmallSet<Arc<DeletePredicate>>,
 }
 
 /// Different memory representations of a frozen chunk.
@@ -310,7 +311,7 @@ impl CatalogChunk {
         time_of_last_write: DateTime<Utc>,
         schema: Arc<Schema>,
         metrics: ChunkMetrics,
-        delete_predicates: Vec<Arc<DeletePredicate>>,
+        delete_predicates: SmallSet<Arc<DeletePredicate>>,
         order: ChunkOrder,
     ) -> Self {
         let stage = ChunkStage::Frozen {
@@ -345,7 +346,7 @@ impl CatalogChunk {
         time_of_first_write: DateTime<Utc>,
         time_of_last_write: DateTime<Utc>,
         metrics: ChunkMetrics,
-        delete_predicates: Vec<Arc<DeletePredicate>>,
+        delete_predicates: SmallSet<Arc<DeletePredicate>>,
         order: ChunkOrder,
     ) -> Self {
         assert_eq!(chunk.table_name(), addr.table_name.as_ref());
@@ -487,7 +488,7 @@ impl CatalogChunk {
             ChunkStage::Frozen { meta, .. } | ChunkStage::Persisted { meta, .. } => {
                 // Add the delete_predicate into the chunk's metadata
                 let mut del_preds = meta.delete_predicates.clone();
-                del_preds.push(delete_predicate);
+                del_preds.insert(delete_predicate);
                 *meta = Arc::new(ChunkMetadata {
                     table_summary: Arc::clone(&meta.table_summary),
                     schema: Arc::clone(&meta.schema),
@@ -682,12 +683,14 @@ impl CatalogChunk {
     /// This only works for chunks in the _open_ stage (chunk is converted) and the _frozen_ stage
     /// (no-op) and will fail for other stages.
     pub fn freeze_with_predicate(&mut self, delete_predicate: Arc<DeletePredicate>) -> Result<()> {
-        self.freeze_with_delete_predicates(vec![delete_predicate])
+        let mut delete_predicates = SmallSet::default();
+        delete_predicates.insert(delete_predicate);
+        self.freeze_with_delete_predicates(delete_predicates)
     }
 
     fn freeze_with_delete_predicates(
         &mut self,
-        delete_predicates: Vec<Arc<DeletePredicate>>,
+        delete_predicates: SmallSet<Arc<DeletePredicate>>,
     ) -> Result<()> {
         match &self.stage {
             ChunkStage::Open { mb_chunk, .. } => {
@@ -723,7 +726,7 @@ impl CatalogChunk {
     }
 
     pub fn freeze(&mut self) -> Result<()> {
-        self.freeze_with_delete_predicates(vec![])
+        self.freeze_with_delete_predicates(Default::default())
     }
 
     /// Set the chunk to be compacting
@@ -1168,7 +1171,7 @@ mod tests {
             now,
             now,
             ChunkMetrics::new_unregistered(),
-            vec![],
+            Default::default(),
             ChunkOrder::new(6).unwrap(),
         )
     }

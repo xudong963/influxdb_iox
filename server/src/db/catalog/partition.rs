@@ -14,6 +14,7 @@ use persistence_windows::{
     min_max_sequence::OptionalMinMaxSequence, persistence_windows::PersistenceWindows,
 };
 use predicate::delete_predicate::DeletePredicate;
+use smallset::SmallSet;
 use snafu::{OptionExt, Snafu};
 use std::{collections::BTreeMap, fmt::Display, sync::Arc};
 use tracker::RwLock;
@@ -228,7 +229,7 @@ impl Partition {
         time_of_first_write: DateTime<Utc>,
         time_of_last_write: DateTime<Utc>,
         schema: Arc<Schema>,
-        delete_predicates: Vec<Arc<DeletePredicate>>,
+        delete_predicates: SmallSet<Arc<DeletePredicate>>,
         chunk_order: ChunkOrder,
         chunk_id: Option<ChunkId>,
     ) -> (ChunkId, &Arc<RwLock<CatalogChunk>>) {
@@ -271,7 +272,7 @@ impl Partition {
         chunk: Arc<parquet_file::chunk::ParquetChunk>,
         time_of_first_write: DateTime<Utc>,
         time_of_last_write: DateTime<Utc>,
-        delete_predicates: Vec<Arc<DeletePredicate>>,
+        delete_predicates: SmallSet<Arc<DeletePredicate>>,
         chunk_order: ChunkOrder,
     ) -> &Arc<RwLock<CatalogChunk>> {
         assert_eq!(chunk.table_name(), self.table_name());

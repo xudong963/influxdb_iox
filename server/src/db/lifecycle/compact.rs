@@ -12,6 +12,7 @@ use lifecycle::LifecycleWriteGuard;
 use observability_deps::tracing::info;
 use predicate::delete_predicate::DeletePredicate;
 use query::{compute_sort_key, exec::ExecutorType, frontend::reorg::ReorgPlanner, QueryChunkMeta};
+use smallset::SmallSet;
 use std::{collections::HashSet, future::Future, sync::Arc};
 use tracker::{TaskTracker, TrackedFuture, TrackedFutureExt};
 
@@ -122,10 +123,9 @@ pub(crate) fn compact_chunks(
             }
         }
 
-        let delete_predicates = {
-            let mut tmp: Vec<_> = delete_predicates_after.into_iter().collect();
-            tmp.sort();
-            tmp
+        let delete_predicates: SmallSet<_> = {
+            let tmp: Vec<_> = delete_predicates_after.into_iter().collect();
+            tmp.into()
         };
 
         let rb_chunk = match maybe_rb_chunk {

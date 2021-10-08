@@ -127,7 +127,7 @@ impl DbChunk {
                 let meta = ChunkMetadata {
                     table_summary: Arc::new(mb_chunk.table_summary()),
                     schema: snapshot.full_schema(),
-                    delete_predicates: vec![], // open chunk does not have delete predicate
+                    delete_predicates: Default::default(), // open chunk does not have delete predicate
                 };
                 (state, Arc::new(meta))
             }
