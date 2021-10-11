@@ -359,7 +359,7 @@ fn datatype_to_measurement_field_enum(data_type: &ArrowDataType) -> Result<Field
 }
 
 /// Wrapper struture that implements [`std::fmt::Display`] for a slice
-/// of [`Frame`s]
+/// of `Frame`s
 struct DisplayableFrames<'a> {
     frames: &'a [Frame],
 }
