@@ -1,7 +1,7 @@
 //! This module contains code to translate from InfluxDB IOx data
 //! formats into the formats needed by gRPC
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, fmt, sync::Arc};
 
 use arrow::{
     array::{
@@ -11,6 +11,7 @@ use arrow::{
     datatypes::DataType as ArrowDataType,
 };
 
+use observability_deps::tracing::trace;
 use query::exec::{
     field::FieldIndex,
     fieldlist::FieldList,
@@ -101,6 +102,7 @@ pub fn series_set_item_to_read_response(series_set_item: SeriesSetItem) -> Resul
         }
         SeriesSetItem::Data(series_set) => series_set_to_frames(series_set)?,
     };
+    trace!(frames=%DisplayableFrames::new(&frames), "Response gRPC frames");
     Ok(ReadResponse { frames })
 }
 
@@ -356,6 +358,111 @@ fn datatype_to_measurement_field_enum(data_type: &ArrowDataType) -> Result<Field
     }
 }
 
+/// Wrapper struture that implements [`std::fmt::Display`] for a slice
+/// of [`Frame`s]
+struct DisplayableFrames<'a> {
+    frames: &'a [Frame],
+}
+
+impl<'a> DisplayableFrames<'a> {
+    fn new(frames: &'a [Frame]) -> Self {
+        Self { frames }
+    }
+}
+
+impl<'a> fmt::Display for DisplayableFrames<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for frame in self.frames.iter() {
+            format_frame(frame, f)?;
+            writeln!(f)?
+        }
+        Ok(())
+    }
+}
+
+fn format_frame(frame: &Frame, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let data = &frame.data;
+    match data {
+        Some(Data::Series(SeriesFrame { tags, data_type })) => write!(
+            f,
+            "SeriesFrame, tags: {}, type: {:?}",
+            dump_tags(tags),
+            data_type
+        ),
+        Some(Data::FloatPoints(FloatPointsFrame { timestamps, values })) => write!(
+            f,
+            "FloatPointsFrame, timestamps: {:?}, values: {:?}",
+            timestamps,
+            dump_values(values)
+        ),
+        Some(Data::IntegerPoints(IntegerPointsFrame { timestamps, values })) => write!(
+            f,
+            "IntegerPointsFrame, timestamps: {:?}, values: {:?}",
+            timestamps,
+            dump_values(values)
+        ),
+        Some(Data::UnsignedPoints(UnsignedPointsFrame { timestamps, values })) => write!(
+            f,
+            "UnsignedPointsFrame, timestamps: {:?}, values: {:?}",
+            timestamps,
+            dump_values(values)
+        ),
+        Some(Data::BooleanPoints(BooleanPointsFrame { timestamps, values })) => write!(
+            f,
+            "BooleanPointsFrame, timestamps: {:?}, values: {}",
+            timestamps,
+            dump_values(values)
+        ),
+        Some(Data::StringPoints(StringPointsFrame { timestamps, values })) => write!(
+            f,
+            "StringPointsFrame, timestamps: {:?}, values: {}",
+            timestamps,
+            dump_values(values)
+        ),
+        Some(Data::Group(GroupFrame {
+            tag_keys,
+            partition_key_vals,
+        })) => write!(
+            f,
+            "GroupFrame, tag_keys: {}, partition_key_vals: {}",
+            dump_u8_vec(tag_keys),
+            dump_u8_vec(partition_key_vals)
+        ),
+        None => write!(f, "<NO data field>"),
+    }
+}
+
+fn dump_values<T>(v: &[T]) -> String
+where
+    T: std::fmt::Display,
+{
+    v.iter()
+        .map(|item| format!("{}", item))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn dump_u8_vec(encoded_strings: &[Vec<u8>]) -> String {
+    encoded_strings
+        .iter()
+        .map(|b| String::from_utf8_lossy(b))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn dump_tags(tags: &[Tag]) -> String {
+    tags.iter()
+        .map(|tag| {
+            format!(
+                "{}={}",
+                String::from_utf8_lossy(&tag.key),
+                String::from_utf8_lossy(&tag.value),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::{datatypes::DataType as ArrowDataType, record_batch::RecordBatch};
@@ -409,11 +516,7 @@ mod tests {
         let response =
             series_set_to_read_response(series_set).expect("Correctly converted series set");
 
-        let dumped_frames = response
-            .frames
-            .iter()
-            .map(|f| dump_frame(f))
-            .collect::<Vec<_>>();
+        let dumped_frames = dump_frames(&response.frames);
 
         let expected_frames = vec![
             "SeriesFrame, tags: _field=string_field,_measurement=the_table,tag1=val1, type: 4",
@@ -465,11 +568,7 @@ mod tests {
         let response =
             series_set_to_read_response(series_set).expect("Correctly converted series set");
 
-        let dumped_frames = response
-            .frames
-            .iter()
-            .map(|f| dump_frame(f))
-            .collect::<Vec<_>>();
+        let dumped_frames = dump_frames(&response.frames);
 
         let expected_frames = vec![
             "SeriesFrame, tags: _field=string_field2,_measurement=the_table,tag1=val1, type: 4",
@@ -525,11 +624,7 @@ mod tests {
         let response =
             series_set_to_read_response(series_set).expect("Correctly converted series set");
 
-        let dumped_frames = response
-            .frames
-            .iter()
-            .map(|f| dump_frame(f))
-            .collect::<Vec<_>>();
+        let dumped_frames = dump_frames(&response.frames);
 
         let expected_frames = vec![
             "SeriesFrame, tags: _field=float_field,_measurement=the_table,state=MA, type: 0",
@@ -555,11 +650,7 @@ mod tests {
         let response = series_set_item_to_read_response(grouped_series_set_item)
             .expect("Correctly converted grouped_series_set_item");
 
-        let dumped_frames = response
-            .frames
-            .iter()
-            .map(|f| dump_frame(f))
-            .collect::<Vec<_>>();
+        let dumped_frames = dump_frames(&response.frames);
 
         let expected_frames = vec![
             "GroupFrame, tag_keys: _field,_measurement,tag1,tag2, partition_key_vals: val1,val2",
@@ -600,11 +691,7 @@ mod tests {
         let response = series_set_item_to_read_response(series_set_item)
             .expect("Correctly converted series_set_item");
 
-        let dumped_frames = response
-            .frames
-            .iter()
-            .map(|f| dump_frame(f))
-            .collect::<Vec<_>>();
+        let dumped_frames = dump_frames(&response.frames);
 
         let expected_frames = vec![
             "SeriesFrame, tags: _field=float_field,_measurement=the_table,tag1=val1, type: 0",
@@ -713,82 +800,6 @@ mod tests {
         }
     }
 
-    fn dump_frame(frame: &Frame) -> String {
-        let data = &frame.data;
-        match data {
-            Some(Data::Series(SeriesFrame { tags, data_type })) => format!(
-                "SeriesFrame, tags: {}, type: {:?}",
-                dump_tags(tags),
-                data_type
-            ),
-            Some(Data::FloatPoints(FloatPointsFrame { timestamps, values })) => format!(
-                "FloatPointsFrame, timestamps: {:?}, values: {:?}",
-                timestamps,
-                dump_values(values)
-            ),
-            Some(Data::IntegerPoints(IntegerPointsFrame { timestamps, values })) => format!(
-                "IntegerPointsFrame, timestamps: {:?}, values: {:?}",
-                timestamps,
-                dump_values(values)
-            ),
-            Some(Data::UnsignedPoints(UnsignedPointsFrame { timestamps, values })) => format!(
-                "UnsignedPointsFrame, timestamps: {:?}, values: {:?}",
-                timestamps,
-                dump_values(values)
-            ),
-            Some(Data::BooleanPoints(BooleanPointsFrame { timestamps, values })) => format!(
-                "BooleanPointsFrame, timestamps: {:?}, values: {}",
-                timestamps,
-                dump_values(values)
-            ),
-            Some(Data::StringPoints(StringPointsFrame { timestamps, values })) => format!(
-                "StringPointsFrame, timestamps: {:?}, values: {}",
-                timestamps,
-                dump_values(values)
-            ),
-            Some(Data::Group(GroupFrame {
-                tag_keys,
-                partition_key_vals,
-            })) => format!(
-                "GroupFrame, tag_keys: {}, partition_key_vals: {}",
-                dump_u8_vec(tag_keys),
-                dump_u8_vec(partition_key_vals),
-            ),
-            None => "<NO data field>".into(),
-        }
-    }
-
-    fn dump_values<T>(v: &[T]) -> String
-    where
-        T: std::fmt::Display,
-    {
-        v.iter()
-            .map(|item| format!("{}", item))
-            .collect::<Vec<_>>()
-            .join(",")
-    }
-
-    fn dump_u8_vec(encoded_strings: &[Vec<u8>]) -> String {
-        encoded_strings
-            .iter()
-            .map(|b| String::from_utf8_lossy(b))
-            .collect::<Vec<_>>()
-            .join(",")
-    }
-
-    fn dump_tags(tags: &[Tag]) -> String {
-        tags.iter()
-            .map(|tag| {
-                format!(
-                    "{}={}",
-                    String::from_utf8_lossy(&tag.key),
-                    String::from_utf8_lossy(&tag.value),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",")
-    }
-
     fn make_record_batch() -> RecordBatch {
         let string_array: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz", "foo"]));
         let int_array: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3, 4]));
@@ -810,5 +821,14 @@ mod tests {
             ("time", timestamp_array, true),
         ])
         .expect("created new record batch")
+    }
+
+    fn dump_frames(frames: &[Frame]) -> Vec<String> {
+        DisplayableFrames::new(frames)
+            .to_string()
+            .trim()
+            .split('\n')
+            .map(|s| s.to_string())
+            .collect()
     }
 }
