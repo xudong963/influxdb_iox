@@ -8,11 +8,13 @@ use arrow::{
 use bytes::Bytes;
 use data_types::chunk_metadata::ChunkAddr;
 use datafusion::{
-    datasource::{object_store::local::LocalFileSystem, PartitionedFile},
-    logical_plan::Expr,
-    physical_plan::{
-        file_format::ParquetExec, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    datasource::{
+        file_format::{parquet::ParquetFormat, FileFormat, PhysicalPlanConfig},
+        object_store::{local::LocalFileSystem, ObjectStore, SizedFile},
+        PartitionedFile,
     },
+    logical_plan::Expr,
+    physical_plan::{Partitioning, SendableRecordBatchStream},
 };
 use datafusion_util::AdapterStream;
 use futures::StreamExt;
@@ -78,6 +80,17 @@ pub enum Error {
 
     #[snafu(display("Internal error: can not get temp file as str: {}", path))]
     TempFilePathAsStr { path: String },
+
+    #[snafu(display("Error getting file reader for {}: {}", path, source))]
+    GettingReader {
+        path: String,
+        source: datafusion::error::DataFusionError,
+    },
+
+    #[snafu(display("Error reading parquet statistics: {}", source))]
+    ReadingStatistics {
+        source: datafusion::error::DataFusionError,
+    },
 
     #[snafu(display(
         "Internal error: unexpected partitioning in parquet reader: {:?}",
@@ -276,34 +289,43 @@ impl Storage {
             path: temp_path.to_string_lossy(),
         })?;
 
-        // TODO: renenable when bug in parquet statistics generation
-        // is fixed: https://github.com/apache/arrow-rs/issues/641
-        // https://github.com/influxdata/influxdb_iox/issues/2163
-        if predicate.is_some() {
-            debug!(?predicate, "Skipping predicate pushdown due to XXX");
-        }
-        let predicate = None;
-
         let object_store = Arc::new(LocalFileSystem {});
+        let filters: Vec<_> = predicate.into_iter().collect();
 
-        // TODO real statistics so we can use parquet row group
-        // pruning (needs both a real predicate and the formats to be
-        // exposed)
-        let statistics = datafusion::physical_plan::Statistics::default();
+        // Read statistics from the parquet file so we can use parquet
+        // row group pruning. It might be cool to use the statistics
+        // stored in the IOx catalog to do this (evetually)
+        let format = ParquetFormat::default();
+        let sized_file = SizedFile {
+            path: temp_path.to_string(),
+            size: file_size,
+        };
+        let reader = object_store
+            .file_reader(sized_file)
+            .context(GettingReader { path: temp_path })?;
+
+        let statistics = format
+            .infer_stats(reader)
+            .await
+            .context(ReadingStatistics)?;
 
         let part_file = PartitionedFile::new(temp_path.to_string(), file_size);
-        let files = vec![vec![part_file]];
 
-        let parquet_exec = ParquetExec::new(
+        let config = PhysicalPlanConfig {
             object_store,
-            files,
-            statistics,
             schema,
-            Some(projection),
-            predicate,
+            files: vec![vec![part_file]],
+            statistics,
+            projection: Some(projection),
             batch_size,
             limit,
-        );
+            filters,
+        };
+
+        let parquet_exec = format
+            .create_physical_plan(config)
+            .await
+            .expect("real error");
 
         // We are assuming there is only a single stream in the
         // call to execute(0) below
