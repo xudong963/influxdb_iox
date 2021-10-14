@@ -18,6 +18,7 @@ use arrow_util::bitset::{iter_set_positions, BitSet};
 use arrow_util::string::PackedStringArray;
 use data_types::partition_metadata::{IsNan, StatValues, Statistics};
 use entry::Column as EntryColumn;
+use influxdb_line_protocol::FieldValue;
 use schema::{IOxValueType, InfluxColumnType, InfluxFieldType, TIME_DATA_TYPE};
 
 /// A "dictionary ID" (DID) is a compact numeric representation of an interned
@@ -125,14 +126,12 @@ impl Column {
         }
     }
 
-    pub(crate) fn validate_schema(&self, entry: &EntryColumn<'_>) -> Result<()> {
-        let entry_type = entry.influx_type();
-
+    pub(crate) fn validate_schema(&self, influx_type: InfluxColumnType) -> Result<()> {
         ensure!(
-            entry_type == self.influx_type,
+            influx_type == self.influx_type,
             TypeMismatch {
                 existing: self.influx_type,
-                inserted: entry_type
+                inserted: influx_type
             }
         );
 
@@ -144,12 +143,91 @@ impl Column {
         self.influx_type
     }
 
-    pub(crate) fn append(
+    /// Appends a tag value
+    ///
+    /// # Panic
+    ///
+    /// If this is not a tag column
+    pub(crate) fn append_tag(&mut self, value: &str) {
+        self.valid.append(true);
+        match &mut self.data {
+            ColumnData::Tag(col_data, dictionary, stats) => {
+                col_data.push(dictionary.lookup_value_or_insert(value));
+                stats.update(value)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Appends a field value
+    ///
+    /// # Panic
+    ///
+    /// If this is not a field column of the matching type
+    pub(crate) fn append_field(&mut self, value: FieldValue<'_>) {
+        self.valid.append(true);
+        match value {
+            FieldValue::I64(value) => match &mut self.data {
+                ColumnData::I64(col_data, stats) => {
+                    col_data.push(value);
+                    stats.update(&value)
+                }
+                _ => unreachable!(),
+            },
+            FieldValue::U64(value) => match &mut self.data {
+                ColumnData::U64(col_data, stats) => {
+                    col_data.push(value);
+                    stats.update(&value)
+                }
+                _ => unreachable!(),
+            },
+            FieldValue::F64(value) => match &mut self.data {
+                ColumnData::F64(col_data, stats) => {
+                    col_data.push(value);
+                    stats.update(&value)
+                }
+                _ => unreachable!(),
+            },
+            FieldValue::String(value) => match &mut self.data {
+                ColumnData::String(col_data, stats) => {
+                    let value: &str = &value;
+                    col_data.append(&value);
+                    stats.update(value)
+                }
+                _ => unreachable!(),
+            },
+            FieldValue::Boolean(value) => match &mut self.data {
+                ColumnData::Bool(col_data, stats) => {
+                    col_data.append(value);
+                    stats.update(&value);
+                }
+                _ => unreachable!(),
+            },
+        }
+    }
+
+    /// Appends a time value
+    ///
+    /// # Panic
+    ///
+    /// If this is not a timestamp column
+    pub(crate) fn append_time(&mut self, value: i64) {
+        self.valid.append(true);
+        match &mut self.data {
+            ColumnData::I64(col_data, stats) => {
+                col_data.push(value);
+                stats.update(&value)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn append_entry(
         &mut self,
         entry: &EntryColumn<'_>,
         inclusion_mask: Option<&[bool]>,
     ) -> Result<()> {
-        self.validate_schema(entry)?;
+        self.validate_schema(entry.influx_type())?;
 
         let masked_values = if let Some(mask) = inclusion_mask {
             assert_eq!(entry.row_count, mask.len());

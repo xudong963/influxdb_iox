@@ -94,6 +94,14 @@ impl BitSet {
         (self.buffer[byte_idx] >> bit_idx) & 1 != 0
     }
 
+    /// Appends a new bool
+    pub fn append(&mut self, value: bool) {
+        self.append_unset(1);
+        if value {
+            self.set(self.len - 1)
+        }
+    }
+
     /// Converts this BitSet to a buffer compatible with arrows boolean encoding
     pub fn to_arrow(&self) -> Buffer {
         Buffer::from(&self.buffer)
@@ -269,5 +277,20 @@ mod tests {
 
         assert_eq!(collected.as_slice(), buffer.as_slice());
         assert_eq!(buffer.as_slice(), mask_buffer.as_slice());
+    }
+
+    #[test]
+    fn test_append() {
+        let bools = &[
+            false, false, false, true, false, false, true, false, true, false, true, true,
+        ];
+
+        let compacted = compact_bools(bools);
+        let mut bitset = BitSet::new();
+        for bool in bools {
+            bitset.append(*bool)
+        }
+
+        assert_eq!(compacted.as_slice(), bitset.buffer.as_slice())
     }
 }

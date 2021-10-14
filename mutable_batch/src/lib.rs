@@ -19,8 +19,9 @@ use crate::column::Column;
 use arrow::record_batch::RecordBatch;
 use entry::TableBatch;
 use hashbrown::HashMap;
+use influxdb_line_protocol::{FieldValue, ParsedLine};
 use schema::selection::Selection;
-use schema::{builder::SchemaBuilder, Schema};
+use schema::{builder::SchemaBuilder, InfluxColumnType, InfluxFieldType, Schema, TIME_COLUMN_NAME};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
 
 pub mod column;
@@ -63,6 +64,9 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct MutableBatch {
     /// Map of column id from the chunk dictionary to the column
     columns: HashMap<String, Column>,
+
+    /// Number of rows in this batch
+    row_count: usize,
 }
 
 impl MutableBatch {
@@ -70,20 +74,8 @@ impl MutableBatch {
     pub fn new() -> Self {
         Self {
             columns: Default::default(),
+            row_count: 0,
         }
-    }
-
-    /// Write the contents of a [`TableBatch`] into this MutableBatch.
-    ///
-    /// If `mask` is provided, only entries that are marked w/ `true` are written.
-    ///
-    /// Panics if the batch specifies a different name for the table in this Chunk
-    pub fn write_table_batch(
-        &mut self,
-        batch: TableBatch<'_>,
-        mask: Option<&[bool]>,
-    ) -> Result<()> {
-        self.write_columns(batch.columns(), mask)
     }
 
     /// Returns the schema for a given selection
@@ -142,16 +134,25 @@ impl MutableBatch {
 
     /// Return the number of rows in this chunk
     pub fn rows(&self) -> usize {
-        self.columns
-            .values()
-            .next()
-            .map(|col| col.len())
-            .unwrap_or(0)
+        self.row_count
     }
 
     /// Returns a reference to the specified column
     pub(crate) fn column(&self, column: &str) -> Result<&Column> {
         self.columns.get(column).context(ColumnNotFound { column })
+    }
+
+    /// Write the contents of a [`TableBatch`] into this MutableBatch.
+    ///
+    /// If `mask` is provided, only entries that are marked w/ `true` are written.
+    ///
+    /// Panics if the batch specifies a different name for the table in this Chunk
+    pub fn write_table_batch(
+        &mut self,
+        batch: TableBatch<'_>,
+        mask: Option<&[bool]>,
+    ) -> Result<()> {
+        self.write_columns(batch.columns(), mask)
     }
 
     /// Validates the schema of the passed in columns, then adds their values to
@@ -191,30 +192,19 @@ impl MutableBatch {
             );
 
             if let Some(c) = self.columns.get(column.name()) {
-                c.validate_schema(column).context(ColumnError {
-                    column: column.name(),
-                })?;
+                c.validate_schema(column.influx_type())
+                    .context(ColumnError {
+                        column: column.name(),
+                    })?;
             }
 
             Ok(())
         })?;
 
         for fb_column in columns {
-            let influx_type = fb_column.influx_type();
+            let column = self.column_or_insert(fb_column.name(), fb_column.influx_type());
 
-            let column = self
-                .columns
-                .raw_entry_mut()
-                .from_key(fb_column.name())
-                .or_insert_with(|| {
-                    (
-                        fb_column.name().to_string(),
-                        Column::new(row_count_before_insert, influx_type),
-                    )
-                })
-                .1;
-
-            column.append(&fb_column, mask).context(ColumnError {
+            column.append_entry(&fb_column, mask).context(ColumnError {
                 column: fb_column.name(),
             })?;
 
@@ -226,14 +216,82 @@ impl MutableBatch {
             c.push_nulls_to_len(final_row_count);
         }
 
+        self.row_count = final_row_count;
+
         Ok(())
+    }
+
+    fn validate_column_schema(&self, name: &str, influx_type: InfluxColumnType) -> Result<()> {
+        if let Some(column) = self.columns.get(name) {
+            column
+                .validate_schema(influx_type)
+                .context(ColumnError { column: name })?;
+        }
+        Ok(())
+    }
+
+    /// Writes the provided [`ParsedLine`] into this
+    pub fn write_line(&mut self, line: ParsedLine<'_>, default_time: i64) -> Result<()> {
+        let final_row_count = self.row_count + 1;
+
+        self.validate_column_schema(TIME_COLUMN_NAME, InfluxColumnType::Timestamp)?;
+
+        for (tag, _) in line.series.tag_set.iter().flatten() {
+            self.validate_column_schema(tag, InfluxColumnType::Tag)?;
+        }
+
+        for (field, value) in &line.field_set {
+            self.validate_column_schema(field, InfluxColumnType::Field(field_value_type(value)))?;
+        }
+
+        for (tag, val) in line.series.tag_set.iter().flatten() {
+            self.column_or_insert(tag, InfluxColumnType::Tag)
+                .append_tag(val);
+        }
+
+        for (field, value) in line.field_set {
+            self.column_or_insert(&field, InfluxColumnType::Field(field_value_type(&value)))
+                .append_field(value);
+        }
+
+        self.column_or_insert(TIME_COLUMN_NAME, InfluxColumnType::Timestamp)
+            .append_time(line.timestamp.unwrap_or(default_time));
+
+        // Pad any columns that did not have values in this batch with NULLs
+        for c in self.columns.values_mut() {
+            c.push_nulls_to_len(final_row_count);
+        }
+
+        self.row_count = final_row_count;
+        Ok(())
+    }
+
+    fn column_or_insert(&mut self, name: &str, influx_type: InfluxColumnType) -> &mut Column {
+        let row_count = self.row_count;
+        self.columns
+            .raw_entry_mut()
+            .from_key(name)
+            .or_insert_with(|| (name.to_string(), Column::new(row_count, influx_type)))
+            .1
+    }
+}
+
+fn field_value_type(value: &FieldValue<'_>) -> InfluxFieldType {
+    match value {
+        FieldValue::I64(_) => InfluxFieldType::Integer,
+        FieldValue::U64(_) => InfluxFieldType::UInteger,
+        FieldValue::F64(_) => InfluxFieldType::Float,
+        FieldValue::String(_) => InfluxFieldType::String,
+        FieldValue::Boolean(_) => InfluxFieldType::Boolean,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use entry::lines_to_sharded_entries;
     use entry::test_helpers::lp_to_entry;
+    use influxdb_line_protocol::parse_lines;
     use schema::{InfluxColumnType, InfluxFieldType};
 
     #[test]
@@ -447,5 +505,61 @@ mod tests {
             "didn't match returned error: {:?}",
             response
         );
+    }
+
+    #[test]
+    fn test_lp() {
+        use data_types::database_rules::{PartitionTemplate, TemplatePart};
+        use entry::test_helpers::sharder;
+        use std::io::Read;
+
+        let raw = include_bytes!("../../tests/fixtures/lineproto/read_filter.lp.gz");
+        let mut gz = flate2::read::GzDecoder::new(&raw[..]);
+        let mut lp = String::new();
+        gz.read_to_string(&mut lp).unwrap();
+
+        let parsed_lines = parse_lines(lp.as_str())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        let entries = lines_to_sharded_entries(
+            &parsed_lines,
+            0,
+            sharder(1).as_ref(),
+            &PartitionTemplate {
+                parts: vec![TemplatePart::Table],
+            },
+        )
+        .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        let entry = entries.into_iter().next().unwrap().entry;
+
+        let mut a = MutableBatch::new();
+
+        for (_, table) in entry.table_batches() {
+            a.write_table_batch(table, None).unwrap()
+        }
+
+        let mut b = MutableBatch::new();
+
+        for maybe_line in parsed_lines {
+            b.write_line(maybe_line, 0).unwrap();
+        }
+
+        assert_eq!(
+            a.schema(Selection::All).unwrap(),
+            b.schema(Selection::All).unwrap()
+        );
+
+        let a_formatted =
+            arrow_util::display::pretty_format_batches(&[a.to_arrow(Selection::All).unwrap()])
+                .unwrap();
+
+        let b_formatted =
+            arrow_util::display::pretty_format_batches(&[b.to_arrow(Selection::All).unwrap()])
+                .unwrap();
+
+        assert_eq!(a_formatted, b_formatted)
     }
 }

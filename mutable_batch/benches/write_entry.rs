@@ -2,7 +2,7 @@ use std::convert::TryInto;
 use std::io::Read;
 
 use bytes::Bytes;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use flate2::read::GzDecoder;
 
 use entry::{
