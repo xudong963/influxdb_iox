@@ -1,4 +1,3 @@
-
 use std::{collections::BTreeSet, sync::Arc};
 
 use arrow::record_batch::RecordBatch;
