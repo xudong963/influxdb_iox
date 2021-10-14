@@ -26,6 +26,7 @@ use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use std::{future::Future, sync::Arc, time::Duration};
 use tokio::{sync::Notify, task::JoinError};
 use tokio_util::sync::CancellationToken;
+use trace::{RingBufferTraceCollector, TraceCollector};
 use uuid::Uuid;
 
 const INIT_BACKOFF: Duration = Duration::from_secs(1);
@@ -1151,8 +1152,8 @@ impl DatabaseStateCatalogLoaded {
     ) -> Result<DatabaseStateInitialized, InitError> {
         let db = Arc::clone(&self.db);
 
-        // TODO: Pull write buffer and lifecycle out of Db
-        db.unsuppress_persistence();
+        // TODO: use proper trace collector
+        let trace_collector: Arc<dyn TraceCollector> = Arc::new(RingBufferTraceCollector::new(5));
 
         let rules = self.provided_rules.rules();
         let write_buffer_factory = shared.application.write_buffer_factory();
@@ -1162,6 +1163,7 @@ impl DatabaseStateCatalogLoaded {
                     .new_config_read(
                         shared.config.server_id,
                         shared.config.name.as_str(),
+                        &trace_collector,
                         connection,
                     )
                     .await
@@ -1179,6 +1181,9 @@ impl DatabaseStateCatalogLoaded {
             }
             _ => None,
         };
+
+        // TODO: Pull write buffer and lifecycle out of Db
+        db.unsuppress_persistence();
 
         Ok(DatabaseStateInitialized {
             db,
@@ -1221,7 +1226,7 @@ mod tests {
     };
     use time::Time;
     use uuid::Uuid;
-    use write_buffer::{config::WriteBufferConfigFactory, mock::MockBufferSharedState};
+    use write_buffer::mock::MockBufferSharedState;
 
     #[tokio::test]
     async fn database_shutdown_waits_for_jobs() {
@@ -1424,12 +1429,13 @@ mod tests {
         ));
 
         // setup application
-        let application = ApplicationState::new(Arc::new(ObjectStore::new_in_memory()), None);
-
-        let mut factory = WriteBufferConfigFactory::new(Arc::clone(application.time_provider()));
-        factory.register_mock("my_mock".to_string(), state.clone());
-
-        let application = Arc::new(application.with_write_buffer_factory(Arc::new(factory)));
+        let application = Arc::new(ApplicationState::new(
+            Arc::new(ObjectStore::new_in_memory()),
+            None,
+        ));
+        application
+            .write_buffer_factory()
+            .register_mock("my_mock".to_string(), state.clone());
 
         let server_id = ServerId::try_from(1).unwrap();
 

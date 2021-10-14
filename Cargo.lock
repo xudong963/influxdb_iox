@@ -1010,6 +1010,7 @@ checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
 name = "entry"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "chrono",
  "data_types",
  "flatbuffers",
@@ -1019,6 +1020,7 @@ dependencies = [
  "schema",
  "snafu",
  "time 0.1.0",
+ "trace",
 ]
 
 [[package]]
@@ -1800,7 +1802,6 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "parking_lot",
- "snafu",
  "time 0.1.0",
  "tokio",
 ]
@@ -4994,11 +4995,14 @@ dependencies = [
  "dotenv",
  "entry",
  "futures",
+ "http",
  "observability_deps",
  "parking_lot",
  "rdkafka",
  "time 0.1.0",
  "tokio",
+ "trace",
+ "trace_http",
  "uuid",
 ]
 
