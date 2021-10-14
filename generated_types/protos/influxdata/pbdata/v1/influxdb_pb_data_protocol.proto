@@ -31,6 +31,16 @@ message TableBatch {
     uint32 row_count = 3;
 }
 
+message PackedString {
+    string values = 1;
+    repeated int32 offsets = 2;
+}
+
+message DictionaryString {
+    PackedString dictionary = 1;
+    repeated int32 values = 2;
+}
+
 message Column {
     string column_name = 1;
 
@@ -55,6 +65,9 @@ message Column {
         repeated string string_values = 4;
         repeated bool bool_values = 5;
         repeated bytes bytes_values = 6;
+
+        PackedString packed_string_values = 7;
+        DictionaryString dict_string_values = 8;
     }
     // The sequence of non-null values contained in this column.
     // Order matters; positions are adjusted by null positions in null_mask.

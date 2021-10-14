@@ -99,6 +99,14 @@ impl<K: AsPrimitive<usize> + FromPrimitive + Zero> PackedStringArray<K> {
     pub fn into_inner(self) -> (Vec<K>, String) {
         (self.offsets, self.storage)
     }
+
+    pub fn storage(&self) -> &str {
+        &self.storage
+    }
+
+    pub fn offsets(&self) -> &[K] {
+        &self.offsets
+    }
 }
 
 impl PackedStringArray<i32> {
