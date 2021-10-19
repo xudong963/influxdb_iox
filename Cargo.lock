@@ -2615,21 +2615,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "packers"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "criterion",
- "influxdb_tsm",
- "observability_deps",
- "parquet",
- "rand",
- "schema",
- "snafu",
- "test_helpers",
-]
-
-[[package]]
 name = "panic_logging"
 version = "0.1.0"
 dependencies = [
@@ -3397,7 +3382,6 @@ dependencies = [
  "itertools",
  "metric",
  "observability_deps",
- "packers",
  "parking_lot",
  "permutation",
  "rand",

@@ -28,7 +28,6 @@ schema = { path = "../schema" }
 
 [dev-dependencies] # In alphabetical order
 criterion = "0.3.3"
-packers = { path = "../packers" }
 rand = "0.8.3"
 rand_distr = "0.4.2"
 test_helpers = { path = "../test_helpers" }
