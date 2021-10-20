@@ -201,10 +201,6 @@ jobs:
           command: python3 -m pip install -r perf/requirements.txt
 
       - run:
-          name: Prime Rust build cache
-          command: cargo build --package influxdb_iox --bin influxdb_iox --package iox_data_generator --bin iox_data_generator
-
-      - run:
           name: Run basic perf test to ensure that perf.py works
           command: perf/perf.py --debug --no-volumes --object-store memory battery-0
 
