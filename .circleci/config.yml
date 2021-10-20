@@ -200,16 +200,9 @@ jobs:
           name: Install perf.py dependencies
           command: python3 -m pip install -r perf/requirements.txt
 
-      - restore_cache:
-          keys:
-            - cargo-lock-{{ checksum "Cargo.lock" }}
       - run:
           name: Prime Rust build cache
           command: cargo build --package influxdb_iox --bin influxdb_iox --package iox_data_generator --bin iox_data_generator
-      - save_cache:
-          key: cargo-lock-{{ checksum "Cargo.lock" }}
-          paths:
-            - target
 
       - run:
           name: Run basic perf test to ensure that perf.py works
