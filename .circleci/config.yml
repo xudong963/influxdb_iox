@@ -423,18 +423,7 @@ workflows:
   # CI for all pull requests.
   ci:
     jobs:
-      - fmt
-      - lint
-      - cargo_audit
       - protobuf-lint
-      - test
-      - test_heappy
-      - test_perf
-      - test_kafka_integration
-      - test_influxdb2_client
-      - build
-      - check-flatbuffers
-      - doc
 
   # Internal pipeline for perf builds.
   #
