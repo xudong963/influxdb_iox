@@ -54,6 +54,26 @@ async fn list_table_names_no_data_pred() {
 }
 
 #[tokio::test]
+async fn list_table_names_no_data_passes() {
+    // no rows pass this predicate
+    run_table_names_test_case(TwoMeasurementsManyFields {}, tsp(10000000, 20000000), vec![]).await;
+}
+
+#[tokio::test]
+async fn list_table_names_no_non_null_data_passes() {
+    // only a single row with a null field passes this predicate (expect no table names)
+    let predicate = PredicateBuilder::default()
+        .table("o2")
+        // only get last row of o2 (timestamp = 300)
+        .timestamp_range(200, 400)
+    // model predicate like _field='reading' which last row does not have
+        .field_columns(vec!["reading"])
+        .build();
+
+    run_table_names_test_case(TwoMeasurementsManyFields {}, predicate, vec![]).await;
+}
+
+#[tokio::test]
 async fn list_table_names_no_data_pred_with_delete() {
     run_table_names_test_case(
         TwoMeasurementsWithDelete {},
