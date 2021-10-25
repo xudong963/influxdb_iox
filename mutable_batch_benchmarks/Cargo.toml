@@ -1,0 +1,24 @@
+[package]
+name = "mutable_batch_benchmarks"
+version = "0.1.0"
+edition = "2018"
+description = "MutableBatch benchmarks"
+
+[dependencies]
+bytes = "1.0"
+flate2 = "1.0"
+mutable_batch = { path = "../mutable_batch" }
+mutable_batch_lp = { path = "../mutable_batch_lp" }
+
+[dev-dependencies]
+arrow_util = { path = "../arrow_util" }
+criterion = "0.3"
+
+
+[[bench]]
+name = "extend"
+harness = false
+
+[[bench]]
+name = "write_lp"
+harness = false

@@ -2211,6 +2211,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mutable_batch_benchmarks"
+version = "0.1.0"
+dependencies = [
+ "arrow_util",
+ "bytes",
+ "criterion",
+ "flate2",
+ "mutable_batch",
+ "mutable_batch_lp",
+]
+
+[[package]]
 name = "mutable_batch_entry"
 version = "0.1.0"
 dependencies = [
@@ -2228,9 +2240,6 @@ name = "mutable_batch_lp"
 version = "0.1.0"
 dependencies = [
  "arrow_util",
- "bytes",
- "criterion",
- "flate2",
  "hashbrown",
  "influxdb_line_protocol",
  "mutable_batch",
