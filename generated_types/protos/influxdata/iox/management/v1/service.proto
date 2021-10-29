@@ -65,6 +65,7 @@ service ManagementService {
       response_type: "google.protobuf.Empty"
       metadata_type: "OperationMetadata"
     };
+    option deprecated = true;
   }
 
   // List partitions in a database

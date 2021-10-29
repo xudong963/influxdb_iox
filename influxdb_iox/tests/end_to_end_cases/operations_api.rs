@@ -5,7 +5,7 @@ use std::time::Duration;
 #[tokio::test]
 async fn test_operations() {
     let server_fixture = ServerFixture::create_single_use().await;
-    let mut management_client = server_fixture.management_client();
+    let mut dummy_job_client = server_fixture.dummy_job_client();
     let mut operations_client = server_fixture.operations_client();
 
     let running_ops = operations_client
@@ -17,7 +17,7 @@ async fn test_operations() {
 
     let nanos = vec![Duration::from_secs(20).as_nanos() as _, 1];
 
-    let iox_operation = management_client
+    let iox_operation = dummy_job_client
         .create_dummy_job(nanos.clone())
         .await
         .expect("create dummy job failed");

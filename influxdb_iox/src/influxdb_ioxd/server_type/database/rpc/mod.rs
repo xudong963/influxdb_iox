@@ -8,6 +8,7 @@ use crate::influxdb_ioxd::{
 };
 
 mod delete;
+mod dummy_job;
 mod flight;
 mod management;
 mod operations;
@@ -55,6 +56,10 @@ where
     add_service!(
         builder,
         operations::make_server(Arc::clone(server_type.application.job_registry()))
+    );
+    add_service!(
+        builder,
+        dummy_job::make_server(Arc::clone(server_type.application.job_registry()))
     );
 
     // remotes can be managed even if the server is not serving
