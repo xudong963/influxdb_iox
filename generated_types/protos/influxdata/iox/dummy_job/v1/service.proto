@@ -1,0 +1,24 @@
+syntax = "proto3";
+package influxdata.iox.dummy_job.v1;
+option go_package = "github.com/influxdata/iox/dummy_job/v1";
+
+import "google/longrunning/operations.proto";
+
+service DummyJobService {
+  // Creates a dummy job that for each value of the nanos field
+  // spawns a task that sleeps for that number of nanoseconds before returning
+  rpc CreateDummyJob(CreateDummyJobRequest) returns (CreateDummyJobResponse) {
+    option (google.longrunning.operation_info) = {
+      response_type: "google.protobuf.Empty"
+      metadata_type: "OperationMetadata"
+    };
+  }
+}
+
+message CreateDummyJobRequest {
+  repeated uint64 nanos = 1;
+}
+
+message CreateDummyJobResponse {
+  google.longrunning.Operation operation = 1;
+}

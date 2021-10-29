@@ -183,6 +183,12 @@ impl ServerFixture {
         &self.server.addrs().http_base
     }
 
+    /// Return a dummy job client suitable for communicating with this
+    /// server
+    pub fn dummy_job_client(&self) -> influxdb_iox_client::dummy_job::Client {
+        influxdb_iox_client::dummy_job::Client::new(self.grpc_channel())
+    }
+
     /// Return an a http client suitable suitable for communicating with this
     /// server
     pub fn influxdb2_client(&self) -> influxdb2_client::Client {

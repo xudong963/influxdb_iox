@@ -1,6 +1,9 @@
 /// Client for health checking API
 pub mod health;
 
+/// Client for dummy job API
+pub mod dummy_job;
+
 /// Client for management API
 pub mod management;
 

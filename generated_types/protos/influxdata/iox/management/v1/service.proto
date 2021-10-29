@@ -66,11 +66,14 @@ service ManagementService {
 
   // Creates a dummy job that for each value of the nanos field
   // spawns a task that sleeps for that number of nanoseconds before returning
+  //
+  // This call is deprecated, see <https://github.com/influxdata/influxdb_iox/issues/2980>.
   rpc CreateDummyJob(CreateDummyJobRequest) returns (CreateDummyJobResponse) {
     option (google.longrunning.operation_info) = {
       response_type: "google.protobuf.Empty"
       metadata_type: "OperationMetadata"
     };
+    option deprecated = true;
   }
 
   // List partitions in a database

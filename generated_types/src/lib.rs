@@ -38,6 +38,16 @@ pub mod influxdata {
             }
         }
 
+        pub mod dummy_job {
+            pub mod v1 {
+                include!(concat!(env!("OUT_DIR"), "/influxdata.iox.dummy_job.v1.rs"));
+                include!(concat!(
+                    env!("OUT_DIR"),
+                    "/influxdata.iox.dummy_job.v1.serde.rs"
+                ));
+            }
+        }
+
         pub mod management {
             pub mod v1 {
                 /// Operation metadata type
