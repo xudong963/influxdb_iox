@@ -298,6 +298,7 @@ impl IOxExecutionContext {
         );
         let ctx = self.child_ctx("collect");
         let stream = ctx.execute_stream(physical_plan).await?;
+        println!(" ====== done ctx.execute_stream");
 
         ctx.run(
             stream
@@ -315,10 +316,12 @@ impl IOxExecutionContext {
         &self,
         physical_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream> {
+        println!(" === in execute_stream");
         match physical_plan.output_partitioning().partition_count() {
             0 => unreachable!(),
             1 => self.execute_stream_partitioned(physical_plan, 0).await,
             _ => {
+                println!(" ==== in execute_stream multi output partitioning");
                 // Merge into a single partition
                 self.execute_stream_partitioned(
                     Arc::new(CoalescePartitionsExec::new(physical_plan)),

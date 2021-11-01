@@ -7,6 +7,8 @@ use arrow::error::{ArrowError, Result};
 use arrow::record_batch::RecordBatch;
 use hashbrown::HashMap;
 
+use observability_deps::tracing::trace;
+
 use crate::dictionary::StringDictionary;
 
 /// Takes a record batch and returns a new record batch with dictionaries
@@ -24,6 +26,8 @@ pub fn optimize_dictionaries(batch: &RecordBatch) -> Result<RecordBatch> {
             _ => Ok(Arc::clone(col)),
         })
         .collect::<Result<Vec<_>>>()?;
+
+    trace!(new_column=?new_columns, "columns after optimize_dict_col");
 
     RecordBatch::try_new(schema, new_columns)
 }

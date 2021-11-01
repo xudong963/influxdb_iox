@@ -738,10 +738,33 @@ async fn sql_select_without_delete_agg() {
     .await;
 }
 
+#[tokio::test]
+async fn sql_select_without_delete_region() {
+    test_helpers::maybe_start_logging();
+
+    let expected = vec![
+        "+--------+",
+        "| region |",
+        "+--------+",
+        "| west   |",
+        "| west   |",
+        "+--------+",
+    ];
+    
+    run_sql_test_case(
+        TwoMeasurementsMubScenario {},
+        "SELECT region from cpu",
+        &expected,
+    )
+    .await;
+}
+
 // BUG: https://github.com/influxdata/influxdb_iox/issues/2776
-#[ignore]
+// #[ignore]
 #[tokio::test]
 async fn sql_select_without_delete_max_foo() {
+    test_helpers::maybe_start_logging();
+
     let expected = vec![
         "+--------------+",
         "| MAX(cpu.foo) |",
@@ -749,6 +772,7 @@ async fn sql_select_without_delete_max_foo() {
         "| you           |",
         "+--------------+",
     ];
+    
     run_sql_test_case(
         scenarios::delete::NoDeleteOneChunk {},
         "SELECT max(foo) from cpu",

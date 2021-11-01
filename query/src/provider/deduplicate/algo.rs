@@ -84,6 +84,8 @@ impl RecordBatchDeduplicator {
             self.last_batch = Some(last_batch);
         }
 
+        trace!(output_record_batch=?output_record_batch, "Output record batch");
+
         Ok(output_record_batch)
     }
 
@@ -371,7 +373,9 @@ impl RecordBatchDeduplicator {
         offset: usize,
         len: usize,
     ) -> ArrowResult<RecordBatch> {
+        trace!(batch=?batch, "Batch before slicing");
         let batch = batch.slice(offset, len);
+        trace!(batch=?batch, "Batch after slicing");
 
         // At time of writing, `concat_batches` concatenates the
         // contents of dictionaries as well; Do a post pass to remove the

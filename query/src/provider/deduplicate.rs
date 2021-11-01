@@ -217,6 +217,7 @@ impl ExecutionPlan for DeduplicateExec {
             }
         });
 
+        println!(" ===== end execute deduplicate");
         Ok(AdapterStream::adapt(self.schema(), rx))
     }
 
@@ -304,6 +305,8 @@ async fn deduplicate(
     } else {
         timer.done()
     }
+
+    println!(" ===== end deduplicate");
 
     Ok(())
 }
