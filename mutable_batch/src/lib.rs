@@ -16,19 +16,23 @@
 //! permitting fast conversion to [`RecordBatch`]
 //!
 
-use crate::column::Column;
-use arrow::record_batch::RecordBatch;
-use entry::TableBatch;
-use hashbrown::HashMap;
-use schema::selection::Selection;
-use schema::{builder::SchemaBuilder, Schema};
-use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use std::ops::Range;
 
+use arrow::record_batch::RecordBatch;
+use hashbrown::HashMap;
+use snafu::{OptionExt, ResultExt, Snafu};
+
+use data_types::write_summary::TimestampSummary;
+use schema::selection::Selection;
+use schema::{builder::SchemaBuilder, Schema, TIME_COLUMN_NAME};
+
+use crate::column::{Column, ColumnData};
+
 pub mod column;
-pub mod filter;
-pub mod partition;
+pub mod payload;
 pub mod writer;
+
+pub use payload::*;
 
 #[allow(missing_docs)]
 #[derive(Debug, Snafu)]
@@ -37,13 +41,6 @@ pub enum Error {
     ColumnError {
         column: String,
         source: column::Error,
-    },
-
-    #[snafu(display("Column {} had {} rows, expected {}", column, expected, actual))]
-    IncorrectRowCount {
-        column: String,
-        expected: usize,
-        actual: usize,
     },
 
     #[snafu(display("arrow conversion error: {}", source))]
@@ -55,8 +52,8 @@ pub enum Error {
     #[snafu(display("Column not found: {}", column))]
     ColumnNotFound { column: String },
 
-    #[snafu(display("Mask had {} rows, expected {}", expected, actual))]
-    IncorrectMaskLength { expected: usize, actual: usize },
+    #[snafu(context(false))]
+    WriterError { source: writer::Error },
 }
 
 /// A specialized `Error` for [`MutableBatch`] errors
@@ -84,19 +81,6 @@ impl MutableBatch {
             columns: Default::default(),
             row_count: 0,
         }
-    }
-
-    /// Write the contents of a [`TableBatch`] into this MutableBatch.
-    ///
-    /// If `mask` is provided, only entries that are marked w/ `true` are written.
-    ///
-    /// Panics if the batch specifies a different name for the table in this Chunk
-    pub fn write_table_batch(
-        &mut self,
-        batch: TableBatch<'_>,
-        mask: Option<&[bool]>,
-    ) -> Result<()> {
-        self.write_columns(batch.columns(), mask)
     }
 
     /// Returns the schema for a given selection
@@ -159,8 +143,24 @@ impl MutableBatch {
         self.row_count
     }
 
+    /// Returns a summary of the write timestamps in this chunk if a
+    /// time column exists
+    pub fn timestamp_summary(&self) -> Option<TimestampSummary> {
+        let time = self.column_names.get(TIME_COLUMN_NAME)?;
+        let mut summary = TimestampSummary::default();
+        match &self.columns[*time].data {
+            ColumnData::I64(col_data, _) => {
+                for t in col_data {
+                    summary.record_nanos(*t)
+                }
+            }
+            _ => unreachable!(),
+        }
+        Some(summary)
+    }
+
     /// Extend this [`MutableBatch`] with the contents of `other`
-    pub fn extend_from(&mut self, other: &Self) -> writer::Result<()> {
+    pub fn extend_from(&mut self, other: &Self) -> Result<()> {
         let mut writer = writer::Writer::new(self, other.row_count);
         writer.write_batch(other)?;
         writer.commit();
@@ -168,7 +168,7 @@ impl MutableBatch {
     }
 
     /// Extend this [`MutableBatch`] with `range` rows from `other`
-    pub fn extend_from_range(&mut self, other: &Self, range: Range<usize>) -> writer::Result<()> {
+    pub fn extend_from_range(&mut self, other: &Self, range: Range<usize>) -> Result<()> {
         let mut writer = writer::Writer::new(self, range.end - range.start);
         writer.write_batch_range(other, range)?;
         writer.commit();
@@ -176,11 +176,7 @@ impl MutableBatch {
     }
 
     /// Extend this [`MutableBatch`] with `ranges` rows from `other`
-    pub fn extend_from_ranges(
-        &mut self,
-        other: &Self,
-        ranges: &[Range<usize>],
-    ) -> writer::Result<()> {
+    pub fn extend_from_ranges(&mut self, other: &Self, ranges: &[Range<usize>]) -> Result<()> {
         let to_insert = ranges.iter().map(|x| x.end - x.start).sum();
 
         let mut writer = writer::Writer::new(self, to_insert);
@@ -190,315 +186,12 @@ impl MutableBatch {
     }
 
     /// Returns a reference to the specified column
-    pub(crate) fn column(&self, column: &str) -> Result<&Column> {
+    pub fn column(&self, column: &str) -> Result<&Column> {
         let idx = self
             .column_names
             .get(column)
             .context(ColumnNotFound { column })?;
 
         Ok(&self.columns[*idx])
-    }
-
-    /// Validates the schema of the passed in columns, then adds their values to
-    /// the associated columns updates summary statistics.
-    ///
-    /// If `mask` is provided, only entries that are marked w/ `true` are written.
-    fn write_columns(
-        &mut self,
-        columns: Vec<entry::Column<'_>>,
-        mask: Option<&[bool]>,
-    ) -> Result<()> {
-        let row_count_before_insert = self.rows();
-        let additional_rows = columns.first().map(|x| x.row_count).unwrap_or_default();
-        let masked_values = if let Some(mask) = mask {
-            ensure!(
-                additional_rows == mask.len(),
-                IncorrectMaskLength {
-                    expected: additional_rows,
-                    actual: mask.len(),
-                }
-            );
-            mask.iter().filter(|x| !*x).count()
-        } else {
-            0
-        };
-        let final_row_count = row_count_before_insert + additional_rows - masked_values;
-
-        // get the column ids and validate schema for those that already exist
-        columns.iter().try_for_each(|column| {
-            ensure!(
-                column.row_count == additional_rows,
-                IncorrectRowCount {
-                    column: column.name(),
-                    expected: additional_rows,
-                    actual: column.row_count,
-                }
-            );
-
-            if let Some(c_idx) = self.column_names.get(column.name()) {
-                self.columns[*c_idx]
-                    .validate_schema(column)
-                    .context(ColumnError {
-                        column: column.name(),
-                    })?;
-            }
-
-            Ok(())
-        })?;
-
-        for fb_column in columns {
-            let influx_type = fb_column.influx_type();
-            let columns_len = self.columns.len();
-
-            let column_idx = *self
-                .column_names
-                .raw_entry_mut()
-                .from_key(fb_column.name())
-                .or_insert_with(|| (fb_column.name().to_string(), columns_len))
-                .1;
-
-            if columns_len == column_idx {
-                self.columns
-                    .push(Column::new(row_count_before_insert, influx_type))
-            }
-
-            let column = &mut self.columns[column_idx];
-
-            assert_eq!(column.len(), row_count_before_insert);
-
-            column.append(&fb_column, mask).context(ColumnError {
-                column: fb_column.name(),
-            })?;
-
-            assert_eq!(column.len(), final_row_count);
-        }
-
-        // Pad any columns that did not have values in this batch with NULLs
-        for c in &mut self.columns {
-            c.push_nulls_to_len(final_row_count);
-        }
-        self.row_count = final_row_count;
-
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use entry::test_helpers::lp_to_entry;
-    use schema::{InfluxColumnType, InfluxFieldType};
-
-    #[test]
-    fn write_columns_validates_schema() {
-        let mut table = MutableBatch::new();
-        let lp = "foo,t1=asdf iv=1i,uv=1u,fv=1.0,bv=true,sv=\"hi\" 1";
-        let entry = lp_to_entry(lp);
-        table
-            .write_columns(
-                entry
-                    .partition_writes()
-                    .unwrap()
-                    .first()
-                    .unwrap()
-                    .table_batches()
-                    .first()
-                    .unwrap()
-                    .columns(),
-                None,
-            )
-            .unwrap();
-
-        let lp = "foo t1=\"string\" 1";
-        let entry = lp_to_entry(lp);
-        let response = table
-            .write_columns(
-                entry
-                    .partition_writes()
-                    .unwrap()
-                    .first()
-                    .unwrap()
-                    .table_batches()
-                    .first()
-                    .unwrap()
-                    .columns(),
-                None,
-            )
-            .err()
-            .unwrap();
-        assert!(
-            matches!(
-                &response,
-                Error::ColumnError {
-                    column,
-                    source: column::Error::TypeMismatch {
-                        existing: InfluxColumnType::Tag,
-                        inserted: InfluxColumnType::Field(InfluxFieldType::String)
-                    }
-                } if column == "t1"
-            ),
-            "didn't match returned error: {:?}",
-            response
-        );
-
-        let lp = "foo iv=1u 1";
-        let entry = lp_to_entry(lp);
-        let response = table
-            .write_columns(
-                entry
-                    .partition_writes()
-                    .unwrap()
-                    .first()
-                    .unwrap()
-                    .table_batches()
-                    .first()
-                    .unwrap()
-                    .columns(),
-                None,
-            )
-            .err()
-            .unwrap();
-        assert!(
-            matches!(
-                &response,
-                Error::ColumnError {
-                    column,
-                    source: column::Error::TypeMismatch {
-                        inserted: InfluxColumnType::Field(InfluxFieldType::UInteger),
-                        existing: InfluxColumnType::Field(InfluxFieldType::Integer)
-                    }
-                } if column == "iv"
-            ),
-            "didn't match returned error: {:?}",
-            response
-        );
-
-        let lp = "foo fv=1i 1";
-        let entry = lp_to_entry(lp);
-        let response = table
-            .write_columns(
-                entry
-                    .partition_writes()
-                    .unwrap()
-                    .first()
-                    .unwrap()
-                    .table_batches()
-                    .first()
-                    .unwrap()
-                    .columns(),
-                None,
-            )
-            .err()
-            .unwrap();
-        assert!(
-            matches!(
-                &response,
-                Error::ColumnError {
-                    column,
-                    source: column::Error::TypeMismatch {
-                        existing: InfluxColumnType::Field(InfluxFieldType::Float),
-                        inserted: InfluxColumnType::Field(InfluxFieldType::Integer)
-                    }
-                } if column == "fv"
-            ),
-            "didn't match returned error: {:?}",
-            response
-        );
-
-        let lp = "foo bv=1 1";
-        let entry = lp_to_entry(lp);
-        let response = table
-            .write_columns(
-                entry
-                    .partition_writes()
-                    .unwrap()
-                    .first()
-                    .unwrap()
-                    .table_batches()
-                    .first()
-                    .unwrap()
-                    .columns(),
-                None,
-            )
-            .err()
-            .unwrap();
-        assert!(
-            matches!(
-                &response,
-                Error::ColumnError {
-                    column,
-                    source: column::Error::TypeMismatch {
-                        existing: InfluxColumnType::Field(InfluxFieldType::Boolean),
-                        inserted: InfluxColumnType::Field(InfluxFieldType::Float)
-                    }
-                } if column == "bv"
-            ),
-            "didn't match returned error: {:?}",
-            response
-        );
-
-        let lp = "foo sv=true 1";
-        let entry = lp_to_entry(lp);
-        let response = table
-            .write_columns(
-                entry
-                    .partition_writes()
-                    .unwrap()
-                    .first()
-                    .unwrap()
-                    .table_batches()
-                    .first()
-                    .unwrap()
-                    .columns(),
-                None,
-            )
-            .err()
-            .unwrap();
-        assert!(
-            matches!(
-                &response,
-                Error::ColumnError {
-                    column,
-                    source: column::Error::TypeMismatch {
-                        existing: InfluxColumnType::Field(InfluxFieldType::String),
-                        inserted: InfluxColumnType::Field(InfluxFieldType::Boolean),
-                    }
-                } if column == "sv"
-            ),
-            "didn't match returned error: {:?}",
-            response
-        );
-
-        let lp = "foo,sv=\"bar\" f=3i 1";
-        let entry = lp_to_entry(lp);
-        let response = table
-            .write_columns(
-                entry
-                    .partition_writes()
-                    .unwrap()
-                    .first()
-                    .unwrap()
-                    .table_batches()
-                    .first()
-                    .unwrap()
-                    .columns(),
-                None,
-            )
-            .err()
-            .unwrap();
-        assert!(
-            matches!(
-                &response,
-                Error::ColumnError {
-                    column,
-                    source: column::Error::TypeMismatch {
-                        existing: InfluxColumnType::Field(InfluxFieldType::String),
-                        inserted: InfluxColumnType::Tag,
-                    }
-                } if column == "sv"
-            ),
-            "didn't match returned error: {:?}",
-            response
-        );
     }
 }
