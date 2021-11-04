@@ -146,7 +146,15 @@ pub enum DeleteDatabaseError {
     ServerError(tonic::Status),
 }
 
-/// Errors returned by Client::delete_database
+/// Errors returned by Client::disown_database
+#[derive(Debug, Error)]
+pub enum DisownDatabaseError {
+    /// Client received an unexpected error from the server
+    #[error("Unexpected server error: {}: {}", .0.code(), .0.message())]
+    ServerError(tonic::Status),
+}
+
+/// Errors returned by Client::restore_database
 #[derive(Debug, Error)]
 pub enum RestoreDatabaseError {
     /// Database not found
@@ -695,6 +703,37 @@ impl Client {
             .unwrap();
 
         Ok(uuid)
+    }
+
+    /// Disown database
+    pub async fn disown_database(
+        &mut self,
+        db_name: impl Into<String> + Send,
+        uuid: &Option<String>,
+        context: &Option<String>,
+    ) -> Result<Uuid, DisownDatabaseError> {
+        unimplemented!();
+        // let response = self
+        //     .inner
+        //     .disown_database(DisownDatabaseRequest {
+        //         db_name: db_name.into(),
+        //         uuid: uuid.to_owned().unwrap_or_default(),
+        //         context: context.to_owned().unwrap_or_default(),
+        //     })
+        //     .await
+        //     .map_err(DisownDatabaseError::ServerError)?;
+        //
+        // let server_uuid = response.into_inner().uuid;
+        // let uuid = Uuid::from_slice(&server_uuid)
+        //     .map_err(|e| {
+        //         format!(
+        //             "Could not create UUID from server value {:?}: {}",
+        //             server_uuid, e
+        //         )
+        //     })
+        //     .unwrap();
+        //
+        // Ok(uuid)
     }
 
     /// Restore database

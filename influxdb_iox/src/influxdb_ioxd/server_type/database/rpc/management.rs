@@ -186,6 +186,24 @@ where
         }))
     }
 
+    async fn disown_database(
+        &self,
+        request: Request<DisownDatabaseRequest>,
+    ) -> Result<Response<DisownDatabaseResponse>, Status> {
+        unimplemented!();
+        // let db_name = DatabaseName::new(request.into_inner().db_name).field("db_name")?;
+        //
+        // let uuid = self
+        //     .server
+        //     .disown_database(&db_name)
+        //     .await
+        //     .map_err(default_server_error_handler)?;
+        //
+        // Ok(Response::new(DisownDatabaseResponse {
+        //     uuid: uuid.as_bytes().to_vec(),
+        // }))
+    }
+
     async fn restore_database(
         &self,
         request: Request<RestoreDatabaseRequest>,
