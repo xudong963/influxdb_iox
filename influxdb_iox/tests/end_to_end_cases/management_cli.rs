@@ -389,6 +389,130 @@ async fn delete_restore_database() {
 }
 
 #[tokio::test]
+async fn disown_database() {
+    let server_fixture = ServerFixture::create_shared(ServerType::Database).await;
+    let addr = server_fixture.grpc_base();
+    let db_name = rand_name();
+    let db = &db_name;
+
+    // Create a database on one server
+    let stdout = String::from_utf8(
+        Command::cargo_bin("influxdb_iox")
+            .unwrap()
+            .arg("database")
+            .arg("create")
+            .arg(db)
+            .arg("--host")
+            .arg(addr)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Created"))
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
+    let created_uuid = stdout.lines().last().unwrap().trim();
+    //.strip_prefix(&format!("Created database {} (", db)).unwrap().strip_suffix(")").unwrap();
+
+    // Disown database returns the UUID
+    let stdout = String::from_utf8(
+        Command::cargo_bin("influxdb_iox")
+            .unwrap()
+            .arg("database")
+            .arg("disown")
+            .arg(db)
+            .arg("--host")
+            .arg(addr)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(format!(
+                "Disowned database {}",
+                db
+            )))
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
+    let deleted_uuid = stdout.lines().last().unwrap().trim();
+    assert_eq!(created_uuid, deleted_uuid);
+
+    // Disowned database is no longer in this server's database list
+    Command::cargo_bin("influxdb_iox")
+        .unwrap()
+        .arg("database")
+        .arg("list")
+        .arg("--host")
+        .arg(addr)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(db).not());
+
+    // Create another database
+    let stdout = String::from_utf8(
+        Command::cargo_bin("influxdb_iox")
+            .unwrap()
+            .arg("database")
+            .arg("create")
+            .arg(db)
+            .arg("--host")
+            .arg(addr)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Created"))
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
+    let created_uuid = stdout.lines().last().unwrap().trim();
+
+    // If an optional UUID is specified, don't disown the database if the UUID doesn't match
+    let incorrect_uuid = Uuid::new_v4();
+    Command::cargo_bin("influxdb_iox")
+        .unwrap()
+        .arg("database")
+        .arg("disown")
+        .arg(db)
+        .arg("--uuid")
+        .arg(incorrect_uuid.to_string())
+        .arg("--host")
+        .arg(addr)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(format!(
+            "Could not disown {}: its UUID is {}, not {}",
+            db, created_uuid, incorrect_uuid
+        )));
+
+    // If an optional UUID is specified, disown the database if the UUID does match
+    let stdout = String::from_utf8(
+        Command::cargo_bin("influxdb_iox")
+            .unwrap()
+            .arg("database")
+            .arg("disown")
+            .arg(db)
+            .arg("--uuid")
+            .arg(created_uuid)
+            .arg("--host")
+            .arg(addr)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(format!(
+                "Disowned database {}",
+                db
+            )))
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
+    let deleted_uuid = stdout.lines().last().unwrap().trim();
+    assert_eq!(created_uuid, deleted_uuid);
+}
+
+#[tokio::test]
 async fn test_get_chunks() {
     let server_fixture = ServerFixture::create_shared(ServerType::Database).await;
     let addr = server_fixture.grpc_base();
