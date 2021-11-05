@@ -8,9 +8,11 @@ description = "IOx-specific semantics wrapping the general-purpose object store 
 bytes = "1.0"
 chrono = "0.4"
 data_types = { path = "../data_types" }
+generated_types = { path = "../generated_types" }
 futures = "0.3"
 object_store = { path = "../object_store" }
 observability_deps = { path = "../observability_deps" }
+prost = "0.8"
 snafu = "0.6"
 tokio = { version = "1.13", features = ["macros", "time"] }
 tokio-stream = "0.1"

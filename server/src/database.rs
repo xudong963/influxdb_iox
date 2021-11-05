@@ -314,6 +314,51 @@ impl Database {
         Ok(location)
     }
 
+    /// Create an adopted database without any state. Returns its location in object storage
+    /// for saving in the server config file.
+    pub async fn adopt(
+        application: Arc<ApplicationState>,
+        db_name: &DatabaseName<'static>,
+        uuid: Uuid,
+        server_id: ServerId,
+    ) -> Result<String, InitError> {
+        info!(%db_name, %uuid, "restoring database");
+
+        let iox_object_store_result =
+            IoxObjectStore::adopt_database(Arc::clone(application.object_store()), uuid).await;
+
+        let iox_object_store = match iox_object_store_result {
+            Ok(iox_os) => iox_os,
+            Err(iox_object_store::IoxObjectStoreError::DatabaseAlreadyActive { .. }) => {
+                return AlreadyActive {
+                    name: db_name.to_string(),
+                    uuid,
+                }
+                .fail();
+            }
+            other => other.context(IoxObjectStoreError)?,
+        };
+
+        let location = iox_object_store.root_path();
+
+        let owner_info = management::v1::OwnerInfo {
+            id: server_id.get_u32(),
+            location: IoxObjectStore::server_config_path(application.object_store(), server_id)
+                .to_string(),
+        };
+        let mut encoded = bytes::BytesMut::new();
+        generated_types::server_config::encode_database_owner_info(&owner_info, &mut encoded)
+            .expect("owner info serialization should be valid");
+        let encoded = encoded.freeze();
+
+        iox_object_store
+            .put_owner_file(encoded)
+            .await
+            .context(SavingOwner)?;
+
+        Ok(location)
+    }
+
     /// Triggers shutdown of this `Database`
     pub fn shutdown(&self) {
         info!(db_name=%self.shared.config.name, "database shutting down");

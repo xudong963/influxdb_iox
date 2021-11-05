@@ -167,6 +167,9 @@ pub enum Error {
     #[snafu(display("{}", source))]
     CannotRestoreDatabase { source: crate::database::InitError },
 
+    #[snafu(display("{}", source))]
+    CannotAdoptDatabase { source: crate::database::InitError },
+
     #[snafu(display("A database with the name `{}` already exists", db_name))]
     DatabaseAlreadyExists { db_name: String },
 
@@ -858,6 +861,91 @@ where
         database.wait_for_init().await.context(DatabaseInit)?;
 
         Ok(())
+    }
+
+    /// Adopt a database that has been marked as deleted. Return an error if no database with
+    /// this UUID can be found, or if there's already an active database with this name.
+    pub async fn adopt_database(&self, uuid: Uuid) -> Result<DatabaseName<'static>> {
+        // Wait for exclusive access to mutate server state
+        let handle_fut = self.shared.state.read().freeze();
+        let handle = handle_fut.await;
+
+        // Don't proceed without a server ID
+        let server_id = {
+            let state = self.shared.state.read();
+            let initialized = state.initialized()?;
+
+            initialized.server_id
+        };
+
+        // Read the database's rules from object storage to get the database name
+        let db_name =
+            database_name_from_rules_file(Arc::clone(self.shared.application.object_store()), uuid)
+                .await
+                .context(CouldNotGetDatabaseNameFromRules)?;
+
+        info!(%db_name, %uuid, "start restoring database");
+
+        // Check that this name is unique among currently active databases
+        if let Ok(existing_db) = self.database(&db_name) {
+            if matches!(existing_db.uuid(), Some(existing_uuid) if existing_uuid == uuid) {
+                return DatabaseAlreadyActive {
+                    name: db_name,
+                    uuid,
+                }
+                .fail();
+            } else {
+                return DatabaseAlreadyExists { db_name }.fail();
+            }
+        }
+
+        // Mark the database as adopted in object storage and get its location for the server
+        // config file
+        let location = Database::adopt(
+            Arc::clone(&self.shared.application),
+            &db_name,
+            uuid,
+            server_id,
+        )
+        .await
+        .context(CannotAdoptDatabase)?;
+
+        let database = {
+            let mut state = self.shared.state.write();
+
+            // Exchange FreezeHandle for mutable access via WriteGuard
+            let mut state = state.unfreeze(handle);
+
+            let database = match &mut *state {
+                ServerState::Initialized(initialized) => {
+                    if initialized.databases.contains_key(&db_name) {
+                        return DatabaseAlreadyExists { db_name }.fail();
+                    }
+
+                    initialized
+                        .new_database(
+                            &self.shared,
+                            DatabaseConfig {
+                                name: db_name.clone(),
+                                location,
+                                server_id,
+                                wipe_catalog_on_error: false,
+                                skip_replay: false,
+                            },
+                        )
+                        .expect("database unique")
+                }
+                _ => unreachable!(),
+            };
+            Arc::clone(database)
+        };
+
+        // Save the database to the server config as soon as it's added to the `ServerState`
+        self.persist_server_config().await?;
+
+        database.wait_for_init().await.context(DatabaseInit)?;
+
+        Ok(db_name)
     }
 
     /// List active databases owned by this server, including their UUIDs.

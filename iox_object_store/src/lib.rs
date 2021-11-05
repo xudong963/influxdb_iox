@@ -25,6 +25,8 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
+use generated_types::influxdata::iox::management::v1::OwnerInfo;
+use prost::Message;
 
 mod paths;
 pub use paths::{
@@ -56,6 +58,12 @@ pub enum IoxObjectStoreError {
 
     #[snafu(display("Could not restore database with UUID `{}`: {}", uuid, source))]
     RestoreFailed {
+        uuid: Uuid,
+        source: object_store::Error,
+    },
+
+    #[snafu(display("Could not adopt database with UUID `{}`: {}", uuid, source))]
+    AdoptFailed {
         uuid: Uuid,
         source: object_store::Error,
     },
@@ -285,6 +293,45 @@ impl IoxObjectStore {
             .context(RestoreFailed { uuid })?;
 
         Ok(Self::existing(inner, root_path))
+    }
+
+    /// Remove the tombstone file to restore a database. Will return an error if this database is
+    /// already active. Returns the reactivated IoxObjectStore.
+    pub async fn adopt_database(
+        inner: Arc<ObjectStore>,
+        uuid: Uuid,
+    ) -> Result<Self, IoxObjectStoreError> {
+        let root_path = Self::root_path_for(&inner, uuid);
+        let object_store = Self::existing(inner, root_path);
+
+        let owner = object_store.get_owner_file().await.expect("TODO");
+
+        let info = OwnerInfo::decode(owner).expect("TODO");
+
+        assert_eq!(0, info.id, "TODO: handle error; is 0 the appropriate 'not set'?");
+
+        todo!("add new transaction here");
+
+        let mut owner = BytesMut::new();
+        info.encode(&mut owner).expect("TODO");
+        let owner = owner.freeze();
+
+        object_store.put_owner_file(owner).await.expect("TODO");
+
+//        let deleted_at = Self::check_deleted(&inner, &root_path)
+//            .await
+//            .context(UnderlyingObjectStoreError)?;
+//
+//        ensure!(deleted_at.is_some(), DatabaseAlreadyActive { uuid });
+
+//        let tombstone_path = root_path.tombstone_path();
+
+//        inner
+//            .delete(&tombstone_path.inner)
+//            .await
+//            .context(AdoptFailed { uuid })?;
+
+        Ok(object_store)
     }
 
     // Catalog transaction file methods ===========================================================

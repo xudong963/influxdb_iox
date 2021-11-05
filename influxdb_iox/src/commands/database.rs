@@ -8,7 +8,7 @@ use influxdb_iox_client::{
     format::QueryOutputFormat,
     management::{
         self, generated_types::*, CreateDatabaseError, DeleteDatabaseError, DisownDatabaseError,
-        GetDatabaseError, ListDatabaseError, RestoreDatabaseError,
+        GetDatabaseError, ListDatabaseError, RestoreDatabaseError, AdoptDatabaseError,
     },
     write::{self, WriteError},
 };
@@ -41,6 +41,9 @@ pub enum Error {
 
     #[error("Error restoring database: {0}")]
     RestoreDatabaseError(#[from] RestoreDatabaseError),
+
+    #[error("Error adopting database: {0}")]
+    AdoptDatabaseError(#[from] AdoptDatabaseError),
 
     #[error("Error reading file {:?}: {}", file_name, source)]
     ReadingFile {
@@ -213,6 +216,18 @@ struct Restore {
     uuid: String,
 }
 
+/// Adopt a deleted database
+#[derive(Debug, StructOpt)]
+struct Adopt {
+    /// The UUID of the database to adopt
+    uuid: Uuid,
+
+    /// Optionally, context for this operation, to be stored in the database's owner file as a
+    /// historical record
+    #[structopt(short, long)]
+    context: Option<String>,
+}
+
 /// All possible subcommands for database
 #[derive(Debug, StructOpt)]
 enum Command {
@@ -227,6 +242,7 @@ enum Command {
     Delete(Delete),
     Disown(Disown),
     Restore(Restore),
+    Adopt(Adopt),
 }
 
 pub async fn command(connection: Connection, config: Config) -> Result<()> {
@@ -379,6 +395,13 @@ pub async fn command(connection: Connection, config: Config) -> Result<()> {
             let mut client = management::Client::new(connection);
             client.restore_database(&command.uuid).await?;
             println!("Restored database {}", command.uuid);
+        }
+        Command::Adopt(command) => {
+            let mut client = management::Client::new(connection);
+            let db_name = client
+                .adopt_database(command.uuid, command.context)
+                .await?;
+            println!("Adopted database {}", db_name);
         }
     }
 
