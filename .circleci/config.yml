@@ -149,11 +149,11 @@ jobs:
       INFLUXDB_IOX_INTEGRATION_LOCAL: 1
       KAFKA_CONNECT: "localhost:9092"
     steps:
-      - run:
-          name: Run Kafka
-          # Sudo needed because data directory owned by root but container runs as unprivileged user
-          command: sudo rpk redpanda start
-          background: true
+      #- run:
+      #    name: Run Kafka
+      #    # Sudo needed because data directory owned by root but container runs as unprivileged user
+      #    command: sudo rpk redpanda start
+      #    background: true
       - checkout
       - rust_components
       - cache_restore
