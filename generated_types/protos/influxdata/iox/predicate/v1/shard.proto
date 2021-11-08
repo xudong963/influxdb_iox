@@ -3,19 +3,11 @@ package influxdata.iox.predicate.v1;
 
 import "influxdata/iox/router/v1/shard.proto";
 
-// Represents a predicate that identifies the writes for a specific shard
+// A predicate that identifies the writes for a specific shard
 message ShardPredicate {
-  // An optional list of matchers for this shard
-  repeated influxdata.iox.router.v1.Matcher matchers = 1;
+  // The shard config
+  repeated influxdata.iox.router.v1.ShardConfig config = 1;
 
-  // An optional hash predicate
-  HashPredicate hash = 2;
-}
-
-// A HashPredicate matches if the SipHash 1-3 of the table name lies in
-// the inclusive range `start..=end`
-message HashPredicate {
-  uint64 start = 1;
-
-  uint64 end = 2;
+  // The shard ID
+  uint32 shard = 2;
 }
