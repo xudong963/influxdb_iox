@@ -142,6 +142,7 @@ pub fn decode(
             let tables = match &payload {
                 Payload::Write(write) => decode_database_batch(write)
                     .map_err(|e| format!("failed to decode database batch: {}", e))?,
+                Payload::Delete(_) => return Err("delete payload not supported".into()),
             };
 
             Ok(DbWrite::new(
