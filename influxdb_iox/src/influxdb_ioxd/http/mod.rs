@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tower::Layer;
 use trace_http::{ctx::TraceHeaderParser, tower::TraceLayer};
 
-use crate::influxdb_ioxd::server_type::{RouteError, ServerType};
+use crate::influxdb_ioxd::server_type::{ApiErrorCode, RouteError, ServerType};
 
 #[cfg(feature = "heappy")]
 mod heappy;
@@ -69,15 +69,15 @@ pub enum ApplicationError {
 impl RouteError for ApplicationError {
     fn response(&self) -> Response<Body> {
         match self {
-            Self::InvalidQueryString { .. } => self.bad_request(),
-            Self::PProf { .. } => self.internal_error(),
-            Self::Prost { .. } => self.internal_error(),
-            Self::ProstIO { .. } => self.internal_error(),
-            Self::EmptyFlamegraph => self.no_content(),
-            Self::HeappyIsNotCompiled => self.internal_error(),
-            Self::PProfIsNotCompiled => self.internal_error(),
+            Self::InvalidQueryString { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::PProf { .. } => self.internal_error(ApiErrorCode::UNKNOWN),
+            Self::Prost { .. } => self.internal_error(ApiErrorCode::UNKNOWN),
+            Self::ProstIO { .. } => self.internal_error(ApiErrorCode::UNKNOWN),
+            Self::EmptyFlamegraph => self.no_content(ApiErrorCode::UNKNOWN),
+            Self::HeappyIsNotCompiled => self.internal_error(ApiErrorCode::UNKNOWN),
+            Self::PProfIsNotCompiled => self.internal_error(ApiErrorCode::UNKNOWN),
             #[cfg(feature = "heappy")]
-            Self::HeappyError { .. } => self.internal_error(),
+            Self::HeappyError { .. } => self.internal_error(ApiErrorCode::UNKNOWN),
             Self::RunModeRouteError { source } => source.response(),
         }
     }
@@ -145,8 +145,12 @@ where
             debug!(?response, "Successfully processed request");
             Ok(response)
         }
+        Err(error) if error.is_internal() => {
+            error!(%error, %method, %uri, ?content_length, "Internal error while handling request");
+            Ok(error.response())
+        }
         Err(error) => {
-            error!(%error, %method, %uri, ?content_length, "Error while handling request");
+            debug!(%error, %method, %uri, ?content_length, "Error while handling request");
             Ok(error.response())
         }
     }

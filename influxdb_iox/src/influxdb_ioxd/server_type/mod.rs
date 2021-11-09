@@ -41,17 +41,17 @@ impl From<ApiErrorCode> for u32 {
 pub trait RouteError: std::error::Error + snafu::AsErrorSource {
     fn response(&self) -> Response<Body>;
 
-    fn bad_request(&self) -> Response<Body> {
+    fn bad_request(&self, api_error_code: ApiErrorCode) -> Response<Body> {
         Response::builder()
             .status(StatusCode::BAD_REQUEST)
-            .body(self.body())
+            .body(self.body(api_error_code))
             .unwrap()
     }
 
-    fn internal_error(&self) -> Response<Body> {
+    fn internal_error(&self, api_error_code: ApiErrorCode) -> Response<Body> {
         Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(self.body())
+            .body(self.body(api_error_code))
             .unwrap()
     }
 
@@ -62,23 +62,28 @@ pub trait RouteError: std::error::Error + snafu::AsErrorSource {
             .unwrap()
     }
 
-    fn no_content(&self) -> Response<Body> {
+    fn no_content(&self, api_error_code: ApiErrorCode) -> Response<Body> {
         Response::builder()
             .status(StatusCode::NO_CONTENT)
-            .body(self.body())
+            .body(self.body(api_error_code))
             .unwrap()
     }
 
-    fn body(&self) -> Body {
-        let json =
-            serde_json::json!({"error": self.to_string(), "error_code": self.api_error_code()})
-                .to_string();
+    fn body(&self, api_error_code: ApiErrorCode) -> Body {
+        let api_error_code: u32 = api_error_code.into();
+
+        let json = serde_json::json!({
+            "error": self.to_string(),
+            "error_code": api_error_code,
+        })
+        .to_string();
+
         Body::from(json)
     }
 
-    /// Map the error type into an API error code.
-    fn api_error_code(&self) -> u32 {
-        ApiErrorCode::UNKNOWN.into()
+    /// Checks if this should be treated as an internal server error.
+    fn is_internal(&self) -> bool {
+        self.response().status().is_server_error()
     }
 }
 

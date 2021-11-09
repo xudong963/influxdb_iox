@@ -66,24 +66,14 @@ pub enum HttpWriteError {
 impl RouteError for HttpWriteError {
     fn response(&self) -> Response<Body> {
         match self {
-            Self::BucketMappingError { .. } => self.internal_error(),
-            Self::WritingPoints { .. } => self.internal_error(),
-            Self::ExpectedQueryString { .. } => self.bad_request(),
-            Self::InvalidQueryString { .. } => self.bad_request(),
-            Self::ReadingBodyAsUtf8 { .. } => self.bad_request(),
-            Self::ParsingLineProtocol { .. } => self.bad_request(),
+            Self::BucketMappingError { .. } => self.internal_error(ApiErrorCode::UNKNOWN),
+            Self::WritingPoints { .. } => self.internal_error(ApiErrorCode::UNKNOWN),
+            Self::ExpectedQueryString { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::InvalidQueryString { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::ReadingBodyAsUtf8 { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::ParsingLineProtocol { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
             Self::DatabaseNotFound { .. } => self.not_found(),
             Self::ParseBody { source } => source.response(),
-        }
-    }
-
-    /// Map the error type into an API error code.
-    fn api_error_code(&self) -> u32 {
-        match self {
-            Self::DatabaseNotFound { .. } => ApiErrorCode::DB_NOT_FOUND.into(),
-            Self::ParseBody { source } => source.api_error_code(),
-            // A "catch all" error code
-            _ => ApiErrorCode::UNKNOWN.into(),
         }
     }
 }

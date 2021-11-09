@@ -4,7 +4,7 @@ use http::header::CONTENT_ENCODING;
 use hyper::{Body, Response};
 use snafu::{ResultExt, Snafu};
 
-use crate::influxdb_ioxd::server_type::RouteError;
+use crate::influxdb_ioxd::server_type::{ApiErrorCode, RouteError};
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Snafu)]
@@ -31,11 +31,11 @@ pub enum ParseBodyError {
 impl RouteError for ParseBodyError {
     fn response(&self) -> Response<Body> {
         match self {
-            Self::RequestSizeExceeded { .. } => self.bad_request(),
-            Self::InvalidContentEncoding { .. } => self.bad_request(),
-            Self::ReadingHeaderAsUtf8 { .. } => self.bad_request(),
-            Self::ReadingBodyAsGzip { .. } => self.bad_request(),
-            Self::ClientHangup { .. } => self.bad_request(),
+            Self::RequestSizeExceeded { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::InvalidContentEncoding { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::ReadingHeaderAsUtf8 { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::ReadingBodyAsGzip { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::ClientHangup { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
         }
     }
 }

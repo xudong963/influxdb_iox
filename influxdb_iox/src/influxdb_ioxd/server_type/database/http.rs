@@ -155,39 +155,27 @@ type Result<T, E = ApplicationError> = std::result::Result<T, E>;
 impl RouteError for ApplicationError {
     fn response(&self) -> Response<Body> {
         match self {
-            Self::BucketMappingError { .. } => self.internal_error(),
-            Self::Query { .. } => self.internal_error(),
-            Self::ExpectedQueryString { .. } => self.bad_request(),
-            Self::InvalidQueryString { .. } => self.bad_request(),
-            Self::ReadingBodyAsUtf8 { .. } => self.bad_request(),
-            Self::ParsingDelete { .. } => self.bad_request(),
-            Self::BuildingDeletePredicate { .. } => self.bad_request(),
-            Self::ExecutingDelete { .. } => self.bad_request(),
+            Self::BucketMappingError { .. } => self.internal_error(ApiErrorCode::UNKNOWN),
+            Self::Query { .. } => self.internal_error(ApiErrorCode::UNKNOWN),
+            Self::ExpectedQueryString { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::InvalidQueryString { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::ReadingBodyAsUtf8 { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::ParsingDelete { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::BuildingDeletePredicate { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::ExecutingDelete { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
             Self::RouteNotFound { .. } => self.not_found(),
-            Self::DatabaseNameError { .. } => self.bad_request(),
+            Self::DatabaseNameError { .. } => self.bad_request(ApiErrorCode::DB_INVALID_NAME),
             Self::DatabaseNotFound { .. } => self.not_found(),
-            Self::CreatingResponse { .. } => self.internal_error(),
-            Self::FormattingResult { .. } => self.internal_error(),
-            Self::ParsingFormat { .. } => self.bad_request(),
-            Self::Planning { .. } => self.bad_request(),
-            Self::ServerIdNotSet => self.bad_request(),
-            Self::ServerNotInitialized => self.bad_request(),
-            Self::DatabaseNotInitialized { .. } => self.bad_request(),
-            Self::InternalServerError => self.internal_error(),
+            Self::CreatingResponse { .. } => self.internal_error(ApiErrorCode::UNKNOWN),
+            Self::FormattingResult { .. } => self.internal_error(ApiErrorCode::UNKNOWN),
+            Self::ParsingFormat { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::Planning { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::ServerIdNotSet => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::ServerNotInitialized => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::DatabaseNotInitialized { .. } => self.bad_request(ApiErrorCode::UNKNOWN),
+            Self::InternalServerError => self.internal_error(ApiErrorCode::UNKNOWN),
             Self::ParseBody { source } => source.response(),
             Self::WriteError { source } => source.response(),
-        }
-    }
-
-    /// Map the error type into an API error code.
-    fn api_error_code(&self) -> u32 {
-        match self {
-            Self::DatabaseNameError { .. } => ApiErrorCode::DB_INVALID_NAME.into(),
-            Self::DatabaseNotFound { .. } => ApiErrorCode::DB_NOT_FOUND.into(),
-            Self::ParseBody { source } => source.api_error_code(),
-            Self::WriteError { source } => source.api_error_code(),
-            // A "catch all" error code
-            _ => ApiErrorCode::UNKNOWN.into(),
         }
     }
 }
@@ -954,6 +942,29 @@ mod tests {
         // Note two json records: one record on each line
         let res = r#"[{"location":"Boston","state":"MA","surface_degrees":50.2,"time":"2021-04-01 14:10:24"},{"bottom_degrees":50.4,"location":"santa_monica","state":"CA","surface_degrees":65.2,"time":"2021-04-01 14:10:24"}]"#;
         check_response("query", response, StatusCode::OK, Some(res)).await;
+    }
+
+    #[tokio::test]
+    async fn test_query_invalid_name() {
+        let (client, test_server) = setup_test_data().await;
+
+        // send query data
+        let response = client
+            .get(&format!(
+                "{}/api/v3/query?d=&q={}",
+                test_server.url(),
+                "select%20*%20from%20h2o_temperature%20order%20by%20surface_degrees"
+            ))
+            .send()
+            .await;
+
+        check_response(
+            "query",
+            response,
+            StatusCode::BAD_REQUEST,
+            Some(r#""error_code":101"#),
+        )
+        .await;
     }
 
     fn gzip_str(s: &str) -> Vec<u8> {

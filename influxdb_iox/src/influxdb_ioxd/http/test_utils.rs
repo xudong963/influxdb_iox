@@ -1,5 +1,4 @@
 use std::{
-    fmt::Debug,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
@@ -7,7 +6,6 @@ use std::{
 use http::header::CONTENT_TYPE;
 use hyper::{server::conn::AddrIncoming, StatusCode};
 use reqwest::Client;
-use serde::de::DeserializeOwned;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -40,32 +38,6 @@ pub async fn check_response(
                 body
             );
         }
-    } else {
-        panic!("Unexpected error response: {:?}", response);
-    }
-}
-
-#[allow(dead_code)]
-pub async fn check_json_response<T: DeserializeOwned + Eq + Debug>(
-    client: &reqwest::Client,
-    url: &str,
-    expected_status: StatusCode,
-) -> T {
-    let response = client.get(url).send().await;
-
-    // Print the response so if the test fails, we have a log of
-    // what went wrong
-    println!("{} response: {:?}", url, response);
-
-    if let Ok(response) = response {
-        let status = response.status();
-        let body: T = response
-            .json()
-            .await
-            .expect("Converting request body to string");
-
-        assert_eq!(status, expected_status);
-        body
     } else {
         panic!("Unexpected error response: {:?}", response);
     }
