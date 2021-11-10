@@ -287,6 +287,20 @@ jobs:
           command: cargo build --no-default-features --features="aws,gcp,azure,heappy,pprof"
       - cache_save
 
+  # build on M1
+  buildm1:
+    machine: true
+    resource_class: runner-ns/m1
+    steps:
+      - checkout
+      - rust_components
+      - run:
+          name: Cargo build
+          command: cargo build --workspace
+      - run:
+          name: Build benches
+          command: cargo test --workspace --benches --no-run
+
   # Lint protobufs.
   protobuf-lint:
     docker:
@@ -427,6 +441,7 @@ workflows:
     when:
       not: << pipeline.parameters.ci_image >>
     jobs:
+      - buildm1
       - fmt
       - lint
       - cargo_audit
