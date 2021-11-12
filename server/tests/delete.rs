@@ -13,7 +13,7 @@ use data_types::{
     timestamp::TimestampRange,
     DatabaseName,
 };
-use predicate::{delete_expr::DeleteExpr, delete_predicate::DeletePredicate};
+use dml::{DeleteExpr, DeletePredicate};
 use query::{QueryChunk, QueryChunkMeta, QueryDatabase};
 use server::{
     db::test_helpers::{run_query, write_lp},
@@ -106,8 +106,8 @@ async fn delete_predicate_preservation() {
         },
         exprs: vec![DeleteExpr::new(
             "selector".to_string(),
-            predicate::delete_expr::Op::Eq,
-            predicate::delete_expr::Scalar::I64(1),
+            dml::Op::Eq,
+            dml::Scalar::I64(1),
         )],
     });
     db.delete("cpu", Arc::clone(&pred)).await.unwrap();

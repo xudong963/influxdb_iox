@@ -8,16 +8,14 @@ use data_types::{
 };
 use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion_util::MemoryStream;
+use dml::DeletePredicate;
 use internal_types::access::AccessRecorder;
 use iox_object_store::ParquetFilePath;
 use mutable_buffer::snapshot::ChunkSnapshot;
 use observability_deps::tracing::debug;
 use parquet_file::chunk::ParquetChunk;
 use partition_metadata::TableSummary;
-use predicate::{
-    delete_predicate::DeletePredicate,
-    predicate::{Predicate, PredicateMatch},
-};
+use predicate::predicate::{Predicate, PredicateMatch};
 use query::{exec::stringset::StringSet, QueryChunk, QueryChunkMeta};
 use read_buffer::RBChunk;
 use schema::InfluxColumnType;

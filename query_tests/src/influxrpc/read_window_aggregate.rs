@@ -9,10 +9,8 @@ use server::{db::test_helpers::write_lp, utils::make_db};
 
 use async_trait::async_trait;
 use datafusion::prelude::*;
-use predicate::{
-    delete_predicate::DeletePredicate,
-    predicate::{Predicate, PredicateBuilder},
-};
+use dml::DeletePredicate;
+use predicate::predicate::{Predicate, PredicateBuilder};
 use query::{
     frontend::influxrpc::InfluxRpcPlanner,
     group_by::{Aggregate, WindowDuration},

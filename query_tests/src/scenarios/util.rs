@@ -1,6 +1,6 @@
 //! This module contains util functions for testing scenarios
 
-use predicate::delete_predicate::DeletePredicate;
+use dml::DeletePredicate;
 use query::{QueryChunk, QueryDatabase};
 use std::fmt::Display;
 use std::sync::Arc;

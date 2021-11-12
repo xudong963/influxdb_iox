@@ -13,11 +13,8 @@ use datafusion::{
     logical_plan::{binary_expr, Operator},
     prelude::*,
 };
-use predicate::{
-    delete_expr::DeleteExpr,
-    delete_predicate::DeletePredicate,
-    predicate::{Predicate, PredicateBuilder},
-};
+use dml::{DeleteExpr, DeletePredicate};
+use predicate::predicate::{Predicate, PredicateBuilder};
 use query::{frontend::influxrpc::InfluxRpcPlanner, group_by::Aggregate};
 
 /// runs read_group(predicate) and compares it to the expected
@@ -90,8 +87,8 @@ impl DbSetup for OneMeasurementNoTagsWithDelete {
             range: TimestampRange { start: 1, end: 1 },
             exprs: vec![DeleteExpr::new(
                 "foo".to_string(),
-                predicate::delete_expr::Op::Eq,
-                predicate::delete_expr::Scalar::F64((1.0).into()),
+                dml::Op::Eq,
+                dml::Scalar::F64((1.0).into()),
             )],
         };
 

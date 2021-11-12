@@ -10,6 +10,7 @@ bytes = "1.0"
 data_types = { path = "../data_types" }
 datafusion = { path = "../datafusion" }
 datafusion_util = { path = "../datafusion_util" }
+dml = { path = "../dml" }
 futures = "0.3.7"
 generated_types = { path = "../generated_types" }
 iox_object_store = { path = "../iox_object_store" }

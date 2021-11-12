@@ -8,11 +8,8 @@ use crate::scenarios::{
 use async_trait::async_trait;
 use data_types::timestamp::TimestampRange;
 use datafusion::logical_plan::{col, lit};
-use predicate::{
-    delete_expr::DeleteExpr,
-    delete_predicate::DeletePredicate,
-    predicate::{Predicate, PredicateBuilder, EMPTY_PREDICATE},
-};
+use dml::{DeleteExpr, DeletePredicate};
+use predicate::predicate::{Predicate, PredicateBuilder, EMPTY_PREDICATE};
 use query::frontend::influxrpc::InfluxRpcPlanner;
 
 #[derive(Debug)]
@@ -597,8 +594,8 @@ impl DbSetup for MeasurementsSortableTagsWithDelete {
             },
             exprs: vec![DeleteExpr::new(
                 "state".to_string(),
-                predicate::delete_expr::Op::Eq,
-                predicate::delete_expr::Scalar::String(("CA").to_string()),
+                dml::Op::Eq,
+                dml::Scalar::String(("CA").to_string()),
             )],
         };
 

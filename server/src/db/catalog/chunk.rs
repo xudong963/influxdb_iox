@@ -13,7 +13,7 @@ use internal_types::access::AccessRecorder;
 use mutable_buffer::{snapshot::ChunkSnapshot as MBChunkSnapshot, MBChunk};
 use observability_deps::tracing::debug;
 use parquet_file::chunk::ParquetChunk;
-use predicate::delete_predicate::DeletePredicate;
+use dml::DeletePredicate;
 use read_buffer::RBChunk;
 use schema::Schema;
 use tracker::{TaskRegistration, TaskTracker};
@@ -894,7 +894,7 @@ mod tests {
             make_chunk as make_parquet_chunk_with_store, make_iox_object_store, TestSize,
         },
     };
-    use predicate::delete_expr::DeleteExpr;
+    use dml::DeleteExpr;
 
     #[test]
     fn test_new_open() {
@@ -1063,8 +1063,8 @@ mod tests {
             range: TimestampRange { start: 0, end: 100 },
             exprs: vec![DeleteExpr::new(
                 "city".to_string(),
-                predicate::delete_expr::Op::Eq,
-                predicate::delete_expr::Scalar::String("Boston".to_string()),
+                dml::Op::Eq,
+                dml::Scalar::String("Boston".to_string()),
             )],
         });
 
@@ -1085,8 +1085,8 @@ mod tests {
             range: TimestampRange { start: 20, end: 50 },
             exprs: vec![DeleteExpr::new(
                 "cost".to_string(),
-                predicate::delete_expr::Op::Ne,
-                predicate::delete_expr::Scalar::I64(15),
+                dml::Op::Ne,
+                dml::Scalar::I64(15),
             )],
         });
         chunk.add_delete_predicate(Arc::clone(&del_pred2));

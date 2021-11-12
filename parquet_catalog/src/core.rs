@@ -8,7 +8,7 @@ use object_store::{ObjectStore, ObjectStoreApi};
 use observability_deps::tracing::{info, warn};
 use parking_lot::RwLock;
 use parquet_file::metadata::IoxParquetMetaData;
-use predicate::delete_predicate::DeletePredicate;
+use dml::DeletePredicate;
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::{
     collections::{

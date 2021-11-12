@@ -13,12 +13,10 @@ use data_types::{
     partition_metadata::{InfluxDbType, TableSummary},
 };
 use datafusion::physical_plan::SendableRecordBatchStream;
+use dml::DeletePredicate;
 use exec::stringset::StringSet;
 use observability_deps::tracing::{debug, trace};
-use predicate::{
-    delete_predicate::DeletePredicate,
-    predicate::{Predicate, PredicateMatch},
-};
+use predicate::predicate::{Predicate, PredicateMatch};
 use schema::selection::Selection;
 use schema::{sort::SortKey, Schema, TIME_COLUMN_NAME};
 

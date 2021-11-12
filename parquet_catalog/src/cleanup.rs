@@ -6,7 +6,7 @@ use iox_object_store::{IoxObjectStore, ParquetFilePath};
 use object_store::{ObjectStore, ObjectStoreApi};
 use observability_deps::tracing::info;
 use parking_lot::Mutex;
-use predicate::delete_predicate::DeletePredicate;
+use dml::DeletePredicate;
 use snafu::{ResultExt, Snafu};
 
 use crate::{

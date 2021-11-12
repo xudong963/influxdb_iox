@@ -22,7 +22,7 @@ use datafusion::physical_plan::{common::SizedRecordBatchStream, SendableRecordBa
 use futures::StreamExt;
 use observability_deps::tracing::debug;
 use parking_lot::Mutex;
-use predicate::delete_predicate::DeletePredicate;
+use dml::DeletePredicate;
 use schema::selection::Selection;
 use schema::{
     builder::SchemaBuilder, merge::SchemaMerger, sort::SortKey, InfluxColumnType, Schema,

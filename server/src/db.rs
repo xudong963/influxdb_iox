@@ -26,6 +26,7 @@ use data_types::{
     server_id::ServerId,
 };
 use datafusion::catalog::{catalog::CatalogProvider, schema::SchemaProvider};
+use dml::DeletePredicate;
 use dml::DmlWrite;
 use iox_object_store::IoxObjectStore;
 use mutable_batch::payload::PartitionWrite;
@@ -38,7 +39,7 @@ use parquet_catalog::{
     prune::prune_history as prune_catalog_transaction_history,
 };
 use persistence_windows::{checkpoint::ReplayPlan, persistence_windows::PersistenceWindows};
-use predicate::{delete_predicate::DeletePredicate, predicate::Predicate};
+use predicate::predicate::Predicate;
 use query::{
     exec::{ExecutionContextProvider, Executor, ExecutorType, IOxExecutionContext},
     QueryDatabase,

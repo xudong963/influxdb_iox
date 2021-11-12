@@ -9,8 +9,7 @@ use std::sync::Arc;
 use data_types::timestamp::TimestampRange;
 use once_cell::sync::OnceCell;
 
-use predicate::delete_expr::DeleteExpr;
-use predicate::delete_predicate::DeletePredicate;
+use dml::{DeleteExpr, DeletePredicate};
 use query::QueryChunk;
 
 use async_trait::async_trait;
@@ -271,8 +270,8 @@ impl DbSetup for OneMeasurementManyNullTagsWithDelete {
             },
             exprs: vec![DeleteExpr::new(
                 "state".to_string(),
-                predicate::delete_expr::Op::Eq,
-                predicate::delete_expr::Scalar::String(("NY").to_string()),
+                dml::Op::Eq,
+                dml::Scalar::String(("NY").to_string()),
             )],
         };
 
@@ -404,8 +403,8 @@ impl DbSetup for TwoMeasurementsWithDelete {
             },
             exprs: vec![DeleteExpr::new(
                 "region".to_string(),
-                predicate::delete_expr::Op::Eq,
-                predicate::delete_expr::Scalar::String("west".to_string()),
+                dml::Op::Eq,
+                dml::Scalar::String("west".to_string()),
             )],
         };
 
@@ -439,8 +438,8 @@ impl DbSetup for TwoMeasurementsWithDeleteAll {
             },
             exprs: vec![DeleteExpr::new(
                 "region".to_string(),
-                predicate::delete_expr::Op::Eq,
-                predicate::delete_expr::Scalar::String("west".to_string()),
+                dml::Op::Eq,
+                dml::Scalar::String("west".to_string()),
             )],
         };
 
@@ -943,8 +942,8 @@ impl DbSetup for EndToEndTestWithDelete {
             },
             exprs: vec![DeleteExpr::new(
                 "name".to_string(),
-                predicate::delete_expr::Op::Eq,
-                predicate::delete_expr::Scalar::String(("disk0").to_string()),
+                dml::Op::Eq,
+                dml::Scalar::String(("disk0").to_string()),
             )],
         };
 
