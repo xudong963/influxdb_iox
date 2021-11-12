@@ -1,6 +1,4 @@
 use chrono::DateTime;
-use data_types::timestamp::TimestampRange;
-use datafusion::logical_plan::{lit, Column, Expr, Operator};
 use snafu::{ResultExt, Snafu};
 use sqlparser::{
     ast::{BinaryOperator, Expr as SqlParserExpr, Ident, Statement, Value},
@@ -8,8 +6,13 @@ use sqlparser::{
     parser::Parser,
 };
 
+use data_types::{
+    delete_predicate::{DeleteExpr, DeletePredicate},
+    timestamp::TimestampRange,
+};
+use datafusion::logical_plan::{lit, Column, Expr, Operator};
+
 use crate::delete_expr::{df_to_expr, expr_to_df};
-use dml::{DeleteExpr, DeletePredicate};
 
 const FLUX_TABLE: &str = "_measurement";
 
@@ -380,7 +383,7 @@ pub fn parse_http_delete_request(input: &str) -> Result<HttpDeleteRequest> {
 
 #[cfg(test)]
 mod tests {
-    use dml::{Op, Scalar};
+    use data_types::delete_predicate::{Op, Scalar};
 
     use super::*;
 

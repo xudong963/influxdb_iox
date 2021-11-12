@@ -9,8 +9,8 @@ use crate::{
         types::TransactionKey,
     },
 };
+use data_types::delete_predicate::{DeleteExpr, DeletePredicate, Op, Scalar};
 use data_types::{chunk_metadata::ChunkId, timestamp::TimestampRange};
-use dml::{DeleteExpr, DeletePredicate, Op, Scalar};
 use iox_object_store::{IoxObjectStore, ParquetFilePath, TransactionFilePath};
 use parquet_file::{
     metadata::IoxParquetMetaData,

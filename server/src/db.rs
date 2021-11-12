@@ -22,11 +22,11 @@ use data_types::partition_metadata::PartitionAddr;
 use data_types::{
     chunk_metadata::{ChunkId, ChunkLifecycleAction, ChunkOrder, ChunkSummary},
     database_rules::DatabaseRules,
+    delete_predicate::DeletePredicate,
     partition_metadata::{PartitionSummary, TableSummary},
     server_id::ServerId,
 };
 use datafusion::catalog::{catalog::CatalogProvider, schema::SchemaProvider};
-use dml::DeletePredicate;
 use dml::DmlWrite;
 use iox_object_store::IoxObjectStore;
 use mutable_batch::payload::PartitionWrite;

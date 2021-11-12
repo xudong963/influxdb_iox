@@ -10,10 +10,10 @@
 
 use data_types::{
     chunk_metadata::{ChunkId, ChunkOrder, ChunkSummary},
+    delete_predicate::DeletePredicate,
     partition_metadata::{InfluxDbType, TableSummary},
 };
 use datafusion::physical_plan::SendableRecordBatchStream;
-use dml::DeletePredicate;
 use exec::stringset::StringSet;
 use observability_deps::tracing::{debug, trace};
 use predicate::predicate::{Predicate, PredicateMatch};
@@ -59,8 +59,11 @@ pub trait QueryChunkMeta: Sized {
         // get all column names but time
         let mut col_names = BTreeSet::new();
         for pred in self.delete_predicates() {
-            //let cols = pred.all_column_names_but_time();
-            pred.all_column_names_but_time(&mut col_names);
+            for expr in &pred.exprs {
+                if expr.column != schema::TIME_COLUMN_NAME {
+                    col_names.insert(expr.column.as_str());
+                }
+            }
         }
 
         // convert to vector

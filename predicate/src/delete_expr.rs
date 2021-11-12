@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use dml::{DeleteExpr, Op, Scalar};
+use data_types::delete_predicate::{DeleteExpr, Op, Scalar};
 use generated_types::influxdata::iox::predicate::v1 as proto;
 use snafu::{OptionExt, ResultExt, Snafu};
 

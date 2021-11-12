@@ -4,11 +4,11 @@ use super::{
 use data_types::chunk_metadata::ChunkAddr;
 use data_types::{
     chunk_metadata::{ChunkId, ChunkOrder},
+    delete_predicate::DeletePredicate,
     partition_metadata,
 };
 use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion_util::MemoryStream;
-use dml::DeletePredicate;
 use internal_types::access::AccessRecorder;
 use iox_object_store::ParquetFilePath;
 use mutable_buffer::snapshot::ChunkSnapshot;

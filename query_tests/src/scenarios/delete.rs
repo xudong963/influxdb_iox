@@ -1,7 +1,7 @@
 //! This module contains testing scenarios for Delete
 
+use data_types::delete_predicate::{DeleteExpr, DeletePredicate};
 use data_types::timestamp::TimestampRange;
-use dml::{DeleteExpr, DeletePredicate};
 
 use async_trait::async_trait;
 
@@ -56,8 +56,8 @@ impl DbSetup for OneDeleteSimpleExprOneChunk {
             range: TimestampRange { start: 0, end: 15 },
             exprs: vec![DeleteExpr::new(
                 "bar".to_string(),
-                dml::Op::Eq,
-                dml::Scalar::F64((1.0).into()),
+                data_types::delete_predicate::Op::Eq,
+                data_types::delete_predicate::Scalar::F64((1.0).into()),
             )],
         };
 
@@ -109,13 +109,13 @@ impl DbSetup for OneDeleteMultiExprsOneChunk {
             exprs: vec![
                 DeleteExpr::new(
                     "bar".to_string(),
-                    dml::Op::Eq,
-                    dml::Scalar::F64((1.0).into()),
+                    data_types::delete_predicate::Op::Eq,
+                    data_types::delete_predicate::Scalar::F64((1.0).into()),
                 ),
                 DeleteExpr::new(
                     "foo".to_string(),
-                    dml::Op::Eq,
-                    dml::Scalar::String("me".to_string()),
+                    data_types::delete_predicate::Op::Eq,
+                    data_types::delete_predicate::Scalar::String("me".to_string()),
                 ),
             ],
         };
@@ -152,13 +152,13 @@ impl DbSetup for TwoDeletesMultiExprsOneChunk {
             exprs: vec![
                 DeleteExpr::new(
                     "bar".to_string(),
-                    dml::Op::Eq,
-                    dml::Scalar::F64((1.0).into()),
+                    data_types::delete_predicate::Op::Eq,
+                    data_types::delete_predicate::Scalar::F64((1.0).into()),
                 ),
                 DeleteExpr::new(
                     "foo".to_string(),
-                    dml::Op::Eq,
-                    dml::Scalar::String("me".to_string()),
+                    data_types::delete_predicate::Op::Eq,
+                    data_types::delete_predicate::Scalar::String("me".to_string()),
                 ),
             ],
         };
@@ -168,8 +168,8 @@ impl DbSetup for TwoDeletesMultiExprsOneChunk {
             range: TimestampRange { start: 10, end: 40 },
             exprs: vec![DeleteExpr::new(
                 "bar".to_string(),
-                dml::Op::Ne,
-                dml::Scalar::F64((1.0).into()),
+                data_types::delete_predicate::Op::Ne,
+                data_types::delete_predicate::Scalar::F64((1.0).into()),
             )],
         };
 
@@ -209,13 +209,13 @@ impl DbSetup for ThreeDeleteThreeChunks {
             exprs: vec![
                 DeleteExpr::new(
                     "bar".to_string(),
-                    dml::Op::Eq,
-                    dml::Scalar::F64((1.0).into()),
+                    data_types::delete_predicate::Op::Eq,
+                    data_types::delete_predicate::Scalar::F64((1.0).into()),
                 ),
                 DeleteExpr::new(
                     "foo".to_string(),
-                    dml::Op::Eq,
-                    dml::Scalar::String("me".to_string()),
+                    data_types::delete_predicate::Op::Eq,
+                    data_types::delete_predicate::Scalar::String("me".to_string()),
                 ),
             ],
         };
@@ -232,8 +232,8 @@ impl DbSetup for ThreeDeleteThreeChunks {
             range: TimestampRange { start: 20, end: 45 },
             exprs: vec![DeleteExpr::new(
                 "foo".to_string(),
-                dml::Op::Eq,
-                dml::Scalar::String("you".to_string()),
+                data_types::delete_predicate::Op::Eq,
+                data_types::delete_predicate::Scalar::String("you".to_string()),
             )],
         };
 
@@ -249,8 +249,8 @@ impl DbSetup for ThreeDeleteThreeChunks {
             range: TimestampRange { start: 75, end: 95 },
             exprs: vec![DeleteExpr::new(
                 "bar".to_string(),
-                dml::Op::Ne,
-                dml::Scalar::F64((7.0).into()),
+                data_types::delete_predicate::Op::Ne,
+                data_types::delete_predicate::Scalar::F64((7.0).into()),
             )],
         };
 

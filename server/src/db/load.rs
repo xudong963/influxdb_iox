@@ -2,7 +2,7 @@
 //! [`PreservedCatalog`](parquet_catalog::core::PreservedCatalog).
 
 use super::catalog::{chunk::ChunkStage, table::TableSchemaUpsertHandle, Catalog};
-use dml::DeletePredicate;
+use data_types::delete_predicate::DeletePredicate;
 use iox_object_store::{IoxObjectStore, ParquetFilePath};
 use observability_deps::tracing::{error, info};
 use parquet_catalog::{

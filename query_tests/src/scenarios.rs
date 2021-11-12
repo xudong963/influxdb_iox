@@ -6,10 +6,12 @@ pub mod util;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use data_types::timestamp::TimestampRange;
+use data_types::{
+    delete_predicate::{DeleteExpr, DeletePredicate},
+    timestamp::TimestampRange,
+};
 use once_cell::sync::OnceCell;
 
-use dml::{DeleteExpr, DeletePredicate};
 use query::QueryChunk;
 
 use async_trait::async_trait;
@@ -270,8 +272,8 @@ impl DbSetup for OneMeasurementManyNullTagsWithDelete {
             },
             exprs: vec![DeleteExpr::new(
                 "state".to_string(),
-                dml::Op::Eq,
-                dml::Scalar::String(("NY").to_string()),
+                data_types::delete_predicate::Op::Eq,
+                data_types::delete_predicate::Scalar::String(("NY").to_string()),
             )],
         };
 
@@ -403,8 +405,8 @@ impl DbSetup for TwoMeasurementsWithDelete {
             },
             exprs: vec![DeleteExpr::new(
                 "region".to_string(),
-                dml::Op::Eq,
-                dml::Scalar::String("west".to_string()),
+                data_types::delete_predicate::Op::Eq,
+                data_types::delete_predicate::Scalar::String("west".to_string()),
             )],
         };
 
@@ -438,8 +440,8 @@ impl DbSetup for TwoMeasurementsWithDeleteAll {
             },
             exprs: vec![DeleteExpr::new(
                 "region".to_string(),
-                dml::Op::Eq,
-                dml::Scalar::String("west".to_string()),
+                data_types::delete_predicate::Op::Eq,
+                data_types::delete_predicate::Scalar::String("west".to_string()),
             )],
         };
 
@@ -942,8 +944,8 @@ impl DbSetup for EndToEndTestWithDelete {
             },
             exprs: vec![DeleteExpr::new(
                 "name".to_string(),
-                dml::Op::Eq,
-                dml::Scalar::String(("disk0").to_string()),
+                data_types::delete_predicate::Op::Eq,
+                data_types::delete_predicate::Scalar::String(("disk0").to_string()),
             )],
         };
 

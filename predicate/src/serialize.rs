@@ -7,12 +7,11 @@
 //! [Ballista]: https://github.com/apache/arrow-datafusion/blob/22fcb3d7a68a56afbe12eab9e7d98f7b8de33703/ballista/rust/core/proto/ballista.proto
 //! [Protocol Buffers 3]: https://developers.google.com/protocol-buffers/docs/proto3
 
-use data_types::timestamp::TimestampRange;
+use data_types::{delete_predicate::DeletePredicate, timestamp::TimestampRange};
 use generated_types::influxdata::iox::predicate::v1 as proto;
 use snafu::{ResultExt, Snafu};
 
 use crate::delete_expr::{expr_to_proto, proto_to_expr};
-use dml::DeletePredicate;
 
 /// Serialize IOx [`DeletePredicate`] to a protobuf object.
 ///

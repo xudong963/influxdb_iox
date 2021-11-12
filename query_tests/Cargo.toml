@@ -11,7 +11,6 @@ description = "Tests of the query engine against different database configuratio
 async-trait = "0.1"
 data_types = { path = "../data_types" }
 datafusion = { path = "../datafusion" }
-dml = { path = "../dml" }
 once_cell = { version = "1.4.0", features = ["parking_lot"] }
 predicate = { path = "../predicate" }
 query = { path = "../query" }
