@@ -706,6 +706,7 @@ mod tests {
         Drop(ChunkId),
         Unload(ChunkId),
         Compact(Vec<ChunkId>),
+        CompactOS(Vec<ChunkId>),
         Persist(Vec<ChunkId>),
     }
 
@@ -907,6 +908,20 @@ mod tests {
 
             Ok(db.registry.lock().complete(()))
         }
+
+        fn compact_object_store_chunks(
+            partition: LifecycleWriteGuard<'_, TestPartition, Self>,
+            chunks: Vec<LifecycleWriteGuard<'_, TestChunk, Self::Chunk>>,
+        ) -> Result<TaskTracker<()>, Self::Error> {
+            // todo
+
+            let event = MoverEvents::CompactOS(chunks.iter().map(|x| x.addr.chunk_id).collect());
+            let db = partition.data().db;
+            db.events.write().push(event);
+
+            Ok(db.registry.lock().complete(()))
+        }
+
 
         fn prepare_persist(
             partition: &mut LifecycleWriteGuard<'_, Self::Partition, Self>,

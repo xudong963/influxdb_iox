@@ -201,6 +201,16 @@ impl LockablePartition for LockableCatalogPartition {
         Ok(tracker)
     }
 
+    fn compact_object_store_chunks(
+        partition: LifecycleWriteGuard<'_, Partition, Self>,
+        chunks: Vec<LifecycleWriteGuard<'_, CatalogChunk, Self::Chunk>>,
+    ) -> Result<TaskTracker<Job>, Self::Error> {
+        info!(table=%partition.table_name(), partition=%partition.partition_key(), "compacting object store chunks");
+        let (tracker, fut) = compact::compact_object_store_chunks(partition, chunks)?;
+        let _ = tokio::spawn(async move { fut.await.log_if_error("compacting object store chunks") });
+        Ok(tracker)
+    }
+
     fn prepare_persist(
         partition: &mut LifecycleWriteGuard<'_, Self::Partition, Self>,
         force: bool,

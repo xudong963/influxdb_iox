@@ -359,6 +359,22 @@ impl Partition {
         self.chunks.values()
     }
 
+    /// Return true if there are no other persisted chunks that are in the middle of 
+    /// the provided chunk orders
+    pub fn contiguous_object_store_chunks(&self, chunk_orders: &BTreeSet<ChunkOrder>) -> bool {
+        let chunks = self.chunks();
+        for chunk in chunks {
+            if chunk.is_persisted() {
+                let order = chunk.order();
+                if !chunk_orders.contains(order) && 
+                    (order >= chunk_orders.first() || order <= chunk_orders.last() ) {
+                        return false;
+                    }
+            }
+        }
+        return true;
+    }
+
     /// Return chunks in this partition with their order and ids.
     ///
     /// Note that chunks are guaranteed ordered by chunk order and ID.
