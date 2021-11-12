@@ -277,7 +277,7 @@ fn parse_time_range(start: &str, stop: &str) -> Result<(i64, i64)> {
 /// Data of a parsed delete
 ///
 /// Note that this struct and its functions are used to parse FLUX DELETE,
-/// https://docs.influxdata.com/influxdb/v2.0/write-data/delete-data/, which happens before
+/// <https://docs.influxdata.com/influxdb/v2.0/write-data/delete-data/>, which happens before
 /// the parsing of timestamps and sql predicate. The examples below will show FLUX DELETE's syntax which is
 /// different from SQL syntax so we need this extra parsing step before invoking sqlparser to parse the
 /// sql-format predicates and timestamps
